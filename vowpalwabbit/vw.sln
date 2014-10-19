@@ -1,6 +1,6 @@
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 2013
-VisualStudioVersion = 12.0.30501.0
+VisualStudioVersion = 12.0.30723.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "libvw", "libvw.vcxproj", "{EA52DE0D-A5BE-4FB9-8C84-3A57BDFEBED9}"
 	ProjectSection(ProjectDependencies) = postProject
@@ -44,6 +44,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "deploy_vw", "..\deploy_vw\d
 	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ExploreTests", "..\explore\tests\ExploreTests.csproj", "{CB0C6B20-560C-4822-8EF6-DA999A64B542}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "E4Lab", "..\E4Lab\E4Lab.csproj", "{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -260,6 +262,22 @@ Global
 		{CB0C6B20-560C-4822-8EF6-DA999A64B542}.Release|x64.ActiveCfg = Release|x64
 		{CB0C6B20-560C-4822-8EF6-DA999A64B542}.Release|x64.Build.0 = Release|x64
 		{CB0C6B20-560C-4822-8EF6-DA999A64B542}.Release|x86.ActiveCfg = Release|x64
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Debug|Mixed Platforms.ActiveCfg = Debug|Any CPU
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Debug|Mixed Platforms.Build.0 = Debug|Any CPU
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Debug|Win32.ActiveCfg = Debug|Any CPU
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Debug|x64.ActiveCfg = Debug|x64
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Debug|x64.Build.0 = Debug|x64
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Release|Mixed Platforms.ActiveCfg = Release|Any CPU
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Release|Mixed Platforms.Build.0 = Release|Any CPU
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Release|Win32.ActiveCfg = Release|Any CPU
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Release|x64.ActiveCfg = Release|x64
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Release|x64.Build.0 = Release|x64
+		{E5BCD2C6-BC47-46C6-837F-4D3FEF7C2EB6}.Release|x86.ActiveCfg = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
