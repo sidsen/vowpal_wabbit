@@ -75,10 +75,6 @@
       <Link>libvw.exp</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <None Include="..\vowpalwabbit\dll\x64\$(ConfigurationName)\libvw.ilk">
-      <Link>libvw.ilk</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
     <None Include="..\vowpalwabbit\dll\x64\$(ConfigurationName)\libvw.lib">
       <Link>libvw.lib</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
