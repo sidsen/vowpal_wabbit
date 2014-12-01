@@ -131,6 +131,8 @@ int main(int argc, char* argv[])
 
 		cout << "Chosen action = " << action << endl;
 		cout << "Exploration record = " << recorder.Get_Recording();
+
+        mwt.Report_Reward(unique_key, 0.5f);
 	}
 	else if (strcmp(argv[1], "tau-first") == 0)
 	{

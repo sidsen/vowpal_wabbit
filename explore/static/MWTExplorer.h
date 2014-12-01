@@ -27,6 +27,9 @@ using namespace std;
 
 #include "utility.h"
 
+#include "was/storage_account.h"
+#include "was/table.h"
+
 /** \defgroup MultiWorldTestingCpp
 \brief C++ implementation, for sample usage see: https://github.com/sidsen/vowpal_wabbit/blob/v0/explore/explore_sample.cpp
 */
@@ -63,6 +66,19 @@ public:
 	MwtExplorer(std::string app_id, IRecorder<Ctx>& recorder) : m_recorder(recorder)
 	{
 		m_app_id = HashUtils::Compute_Id_Hash(app_id);
+        
+        utility::string_t storage_connection_string = L"AccountName=;AccountKey=;DefaultEndpointsProtocol=https";
+        
+        // Initialize storage account
+        azure::storage::cloud_storage_account storage_account = azure::storage::cloud_storage_account::parse(storage_connection_string);
+
+        // Create a table
+        azure::storage::cloud_table_client table_client = storage_account.create_cloud_table_client();
+        
+        wstring table_name(app_id.begin(), app_id.end()); // TODO: app_id may not be a valid Azure Table name
+        m_azure_table = table_client.get_table_reference(table_name);
+        m_azure_table.create_if_not_exists();
+        // TODO: check result for valid table later when needed
 	}
 
 	///
@@ -85,14 +101,51 @@ public:
 		if (std::get<2>(action_probability_log_tuple))
 		{
 			m_recorder.Record(context, action, prob, unique_key);
+
+            // Insert a table entity
+            wstring partition_key = to_wstring(seed);
+            wstring row_key(unique_key.begin(), unique_key.end());
+            azure::storage::table_entity entity(partition_key, row_key);
+
+            azure::storage::table_entity::properties_type& properties = entity.properties();
+            properties.reserve(4);
+            properties[U("Action")] = azure::storage::entity_property((int32_t)action);
+            properties[U("Probability")] = azure::storage::entity_property((double)prob);
+            properties[U("Context")] = azure::storage::entity_property(std::vector<uint8_t>(10, 'X'));
+            properties[U("TimeStamp")] = azure::storage::entity_property(utility::datetime::utc_now());
+
+            azure::storage::table_operation insert_operation = azure::storage::table_operation::insert_entity(entity);
+            m_azure_table.execute(insert_operation);
+
+            // TODO: Making REST requests within intensive Choose_Action loop could be problematic so some batching might still be needed...
+            // TODO: what to do if this insert fails?
 		}
 
 		return action;
 	}
 
+    void Report_Reward(string unique_key, float reward)
+    {
+        u64 seed = HashUtils::Compute_Id_Hash(unique_key);
+
+        wstring partition_key = to_wstring(seed);
+        wstring row_key(unique_key.begin(), unique_key.end());
+        azure::storage::table_entity entity(partition_key, row_key);
+
+        azure::storage::table_entity::properties_type& properties = entity.properties();
+        properties[U("Reward")] = azure::storage::entity_property((double)reward);
+        properties[U("TimeStamp")] = azure::storage::entity_property(utility::datetime::utc_now());
+
+        azure::storage::table_operation merge_operation = azure::storage::table_operation::merge_entity(entity);
+        m_azure_table.execute(merge_operation);
+
+        // TODO: what to do if this insert fails?
+    }
+
 private:
 	u64 m_app_id;
 	IRecorder<Ctx>& m_recorder;
+    azure::storage::cloud_table m_azure_table;
 };
 
 ///
