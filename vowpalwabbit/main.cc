@@ -20,135 +20,107 @@ license as described in the file LICENSE.
 #include "options.h"
 #include "options_boost_po.h"
 
+#include <iostream>
+#include <stdio.h>
+#include <windows.h>
+#include <winternl.h>
+#include <assert.h>
+
+#include <cstring>
+
+#include "hvmagent_api.h"
+
+#include <bitset>
+#include "vw.h"
+
+#include <math.h>
+#include <cguid.h>
+#include <chrono>
+#include <algorithm>
+
+#define ASSERT(exp)                                          \
+  do                                                         \
+  {                                                          \
+    bool status = (exp);                                     \
+    if (!status)                                             \
+    {                                                        \
+      printf("%s:%d FATAL: %s\n", __FILE__, __LINE__, #exp); \
+      exit(1);                                               \
+    }                                                        \
+  } while (0);
+
 using namespace std;
 using namespace VW::config;
 
-vw* setup(options_i& options)
-{
-  vw* all = nullptr;
-  try
-  {
-    all = VW::initialize(options);
-  }
-  catch (const exception& ex)
-  {
-    cout << ex.what() << endl;
-    throw;
-  }
-  catch (...)
-  {
-    cout << "unknown exception" << endl;
-    throw;
-  }
-  all->vw_is_main = true;
-
-  if (!all->quiet && !all->bfgs && !all->searchstr && !options.was_supplied("audit_regressor"))
-  {
-    all->trace_message << std::left << std::setw(shared_data::col_avg_loss) << std::left << "average"
-                       << " " << std::setw(shared_data::col_since_last) << std::left << "since"
-                       << " " << std::right << std::setw(shared_data::col_example_counter) << "example"
-                       << " " << std::setw(shared_data::col_example_weight) << "example"
-                       << " " << std::setw(shared_data::col_current_label) << "current"
-                       << " " << std::setw(shared_data::col_current_predict) << "current"
-                       << " " << std::setw(shared_data::col_current_features) << "current" << std::endl;
-    all->trace_message << std::left << std::setw(shared_data::col_avg_loss) << std::left << "loss"
-                       << " " << std::setw(shared_data::col_since_last) << std::left << "last"
-                       << " " << std::right << std::setw(shared_data::col_example_counter) << "counter"
-                       << " " << std::setw(shared_data::col_example_weight) << "weight"
-                       << " " << std::setw(shared_data::col_current_label) << "label"
-                       << " " << std::setw(shared_data::col_current_predict) << "predict"
-                       << " " << std::setw(shared_data::col_current_features) << "features" << std::endl;
-  }
-
-  return all;
-}
-
+/*
+  optional 1st arg = buffer size
+*/
 int main(int argc, char* argv[])
 {
-  bool should_use_onethread = false;
-  option_group_definition driver_config("driver");
-  driver_config.add(make_option("onethread", should_use_onethread).help("Disable parse thread"));
+  // initialize HVMagent
+  int bufferSize, totalPrimaryCores, delay;
+  int BUFFER_MODE = 0;
+  delay = 100;
+  HVMAgent_Init(bufferSize, totalPrimaryCores, delay);
+  std::cout << "" << endl;
+  std::cout << "HVMAgent initialized" << endl;
+  std::cout << "" << endl;
 
-  try
+
+  // read server CPU info from HVMagent
+  int totalCores = HVMAgent_GetPhysicalCoreCount();    // # physical cores on the whole server (min root included) (e.g. 28)
+  UINT32 minRootCores = HVMAgent_GetMinRootLPs() / 2;  // # physical core for min root (e.g. 4)
+  UINT64 busyMask, hvmMask;
+  int busyMaskCount;
+  int numCoresBusyPrimary;
+
+  totalPrimaryCores = totalCores - minRootCores;  // max #cores used by primary = 28-4=24
+  std::cout << "totalCores " << totalCores << endl;
+  std::cout << "minRootCores " << minRootCores << endl;
+  std::cout << "totalPrimaryCores " << totalPrimaryCores << endl;
+
+  bufferSize = 0;
+  if (argc == 2)
   {
-    // support multiple vw instances for training of the same datafile for the same instance
-    vector<std::unique_ptr<options_boost_po>> arguments;
-    vector<vw*> alls;
-    if (argc == 3 && !strcmp(argv[1], "--args"))
-    {
-      std::fstream arg_file(argv[2]);
-
-      int line_count = 1;
-      std::string line;
-      while (std::getline(arg_file, line))
-      {
-        std::stringstream sstr;
-        sstr << line << " -f model." << (line_count++);
-        sstr << " --no_stdin";  // can't use stdin with multiple models
-
-        std::cout << sstr.str() << endl;
-        string str = sstr.str();
-        const char* new_args = str.c_str();
-
-        int l_argc;
-        char** l_argv = VW::get_argv_from_string(new_args, l_argc);
-
-        std::unique_ptr<options_boost_po> ptr(new options_boost_po(argc, argv));
-        ptr->add_and_parse(driver_config);
-        alls.push_back(setup(*ptr.get()));
-        arguments.push_back(std::move(ptr));
-      }
-    }
-    else
-    {
-      std::unique_ptr<options_boost_po> ptr(new options_boost_po(argc, argv));
-      ptr->add_and_parse(driver_config);
-      alls.push_back(setup(*ptr.get()));
-      arguments.push_back(std::move(ptr));
-    }
-
-    vw& all = *alls[0];
-
-    // struct timeb t_start, t_end;
-    // ftime(&t_start);
-
-    if (should_use_onethread)
-    {
-      if (alls.size() == 1)
-        LEARNER::generic_driver_onethread(all);
-      else
-        throw "--onethread doesn't make sense with multiple learners";
-    }
-    else
-    {
-      VW::start_parser(all);
-      if (alls.size() == 1)
-        LEARNER::generic_driver(all);
-      else
-        LEARNER::generic_driver(alls);
-      VW::end_parser(all);
-    }
-
-    for (vw* v : alls)
-    {
-      VW::sync_stats(*v);
-      VW::finish(*v);
-    }
+    BUFFER_MODE = 1;
+    bufferSize = std::stoi(argv[1]);
+    std::cout << "bufferSize=" << bufferSize << endl;
   }
-  catch (VW::vw_exception& e)
+
+
+  // create CPU group for HVM
+  GUID hvmGuid;
+  // CLSIDFromString(L"9123CF97-AD5D-46F2-BFA3-F36950100051", (LPCLSID)&hvmGuid);
+  int numPrimaryCores = totalPrimaryCores;
+  int minHvmCores = 1;                                             // min guaranteed # cores for HVM
+  int numHvmCores = minHvmCores;                                   
+  ASSERT(HVMAgent_CreateCpuGroup(&hvmGuid, numHvmCores) == S_OK);  // create a cpu group for HVM
+  ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroup(hvmGuid)));
+  std::cout << "" << endl;
+  std::cout << "CPUgroup for HVM created" << endl;
+  std::cout << "" << endl;
+
+  
+  //while (1)
+  for (int j = 0; j < 5; j++)
   {
-    cerr << "vw (" << e.Filename() << ":" << e.LineNumber() << "): " << e.what() << endl;
+    std::cout << "" << endl;
+    std::cout << "iteration " << j << endl;
+
+    // sleep for 1ms (change cpu group every 1ms)
+    Sleep(1);
+
+    hvmMask = HVMAgent_GenerateMaskFromBack(numHvmCores);
+    busyMask = HVMAgent_BusyMaskPrimary() & (~hvmMask);  // read number of busy logical cores of all cores (excluding hvm cores) on the server
+    std::bitset<64> cpuBusyBit(busyMask);              // 64 bit
+    numCoresBusyPrimary = (cpuBusyBit.count() - minRootCores) / 2;  // # busy physical cores used by primary (excluding minRootCores)
+
+    numHvmCores = std::max(minHvmCores, totalPrimaryCores - (numCoresBusyPrimary + bufferSize));  // # phsyical cores to give to HVM
+
+    std::cout << "numCoresBusyPrimary" << numCoresBusyPrimary << endl;
+    std::cout << "numHvmCores" << numHvmCores << endl;
+    ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCores(hvmGuid, numHvmCores)));
   }
-  catch (exception& e)
-  {
-    // vw is implemented as a library, so we use 'throw runtime_error()'
-    // error 'handling' everywhere.  To reduce stderr pollution
-    // everything gets caught here & the error message is printed
-    // sans the excess exception noise, and core dump.
-    cerr << "vw: " << e.what() << endl;
-    // cin.ignore();
-    exit(1);
-  }
-  // cin.ignore();
+
   return 0;
 }
