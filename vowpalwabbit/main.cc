@@ -38,6 +38,8 @@ license as described in the file LICENSE.
 #include <chrono>
 #include <algorithm>
 
+using namespace std::chrono;
+
 #define ASSERT(exp)                                          \
   do                                                         \
   {                                                          \
@@ -59,12 +61,23 @@ int main(int argc, char* argv[])
 {
   // initialize HVMagent
   int bufferSize, totalPrimaryCores, delay;
-  int FIXED_BUFFER_MODE = 0;
+  
   int fixed_buffer_sleep_ms = 1;
-  if (argc == 2)
+
+  int DEBUG = std::stoi(argv[1]);
+  int debug_count = 0;
+
+  int TIMING = std::stoi(argv[2]);
+  auto start = high_resolution_clock::now();
+  auto stop = high_resolution_clock::now();
+  auto duration = duration_cast<microseconds>(stop - start); 
+  //auto time_data_collection, time_feature_computation, time_model_udpate, time_model_inference, time_cpugroup_update;
+
+  int FIXED_BUFFER_MODE = 0;
+  if (argc == 4)
   {
     FIXED_BUFFER_MODE = 1;
-    bufferSize = std::stoi(argv[1]);
+    bufferSize = std::stoi(argv[3]);
     std::cout << "bufferSize=" << bufferSize << endl;
   }
 
@@ -124,6 +137,7 @@ int main(int argc, char* argv[])
   example* ex_pred;
   // int sleep_ms = 0.05;  // 0.05ms = 50us
 
+
   //for (int j = 0; j < 5; j++)
   //{
   //  std::cout << "" << endl;
@@ -131,6 +145,11 @@ int main(int argc, char* argv[])
 
   while(1)
   {
+
+    debug_count++;
+    if (DEBUG & debug_count > 6)
+      break;
+
     if (FIXED_BUFFER_MODE)
     {
       Sleep(fixed_buffer_sleep_ms);
@@ -143,13 +162,20 @@ int main(int argc, char* argv[])
 
       numHvmCores = std::max(minHvmCores, totalPrimaryCores - (numCoresBusyPrimary + bufferSize));  // # phsyical cores to give to HVM
 
-      std::cout << "numCoresBusyPrimary" << numCoresBusyPrimary << endl;
-      std::cout << "numHvmCores" << numHvmCores << endl;
+      if (DEBUG)
+      {
+        std::cout << "numCoresBusyPrimary" << numCoresBusyPrimary << endl;
+        std::cout << "numHvmCores" << numHvmCores << endl;
+      }
+      
       ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCores(hvmGuid, numHvmCores)));
     }
     else
     {
       sum = 0;
+
+      start = high_resolution_clock::now();
+
       /****** collect cpu data for 10ms ******/
       for (int i = 0; i < size; i++)
       {
@@ -182,6 +208,16 @@ int main(int argc, char* argv[])
         }
       }
 
+      stop = high_resolution_clock::now();
+      if (TIMING)
+      {
+        duration = duration_cast<microseconds>(stop - start);
+        std::cout << duration.count() << endl;
+        //time_data_collection = duration_cast<microseconds>(stop - start);
+        //std::cout << "time_data_collection (us) " << duration.count() << endl;
+      }
+      start = high_resolution_clock::now();
+
       // compute avg
       avg = 1.0 * sum / size;
 
@@ -201,14 +237,25 @@ int main(int argc, char* argv[])
       else
         med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2.0;
 
-      /*
-      std::cout << "min=" << min << endl;
-      std::cout << "max=" << max << endl;
-      std::cout << "avg=" << avg << endl;
-      std::cout << "stddev=" << stddev << endl;
-      std::cout << "med=" << med << endl;
-      */
+      stop = high_resolution_clock::now();
+      if (TIMING)
+      {
+        duration = duration_cast<microseconds>(stop - start);
+        std::cout << duration.count() << endl;
+        //time_feature_computation = duration_cast<microseconds>(stop - start);
+        //std::cout << "time_feature_computation (us) " << duration.count() << endl;
+      }
+     
 
+      if (DEBUG)
+      {
+        std::cout << "min=" << min << endl;
+        std::cout << "max=" << max << endl;
+        std::cout << "avg=" << avg << endl;
+        std::cout << "stddev=" << stddev << endl;
+        std::cout << "med=" << med << endl;
+      }
+      
       /****** construct example to train vw ******/
       if (first_window)
       {
@@ -219,6 +266,7 @@ int main(int argc, char* argv[])
       }
       else
       {
+        start = high_resolution_clock::now();
         if (max < numPrimaryCores)
         {
           // over-prediction
@@ -238,41 +286,81 @@ int main(int argc, char* argv[])
 
           // update vw model with features from previous window
           ex = VW::read_example(*vw, vwMsg.c_str());
-          std::cout << "vwMsg to update model:" << endl;
-          std::cout << vwMsg.c_str() << endl;
-          // example* ex = VW::read_example(*vw, "1:3 2:0 3:-1 |busy_cores_prev_interval min:0 max:0 avg:0 stddev:0
-          // med:0");
+          
+          if (DEBUG)
+            std::cout << "vwMsg to update model: " <<  vwMsg.c_str() << endl;
+          // example* ex = VW::read_example(*vw, "1:3 2:0 3:-1 |busy_cores_prev_interval min:0 max:0 avg:0 stddev:0 med:0");
           vw->learn(*ex);
           VW::finish_example(*vw, *ex);
+
+          stop = high_resolution_clock::now();
+          if (TIMING)
+          {
+            duration = duration_cast<microseconds>(stop - start);
+            std::cout << duration.count() << endl;
+            //time_model_udpate = duration_cast<microseconds>(stop - start);
+            //std::cout << "time_model_udpate (us) " << duration.count() << endl;
+          }
+          start = high_resolution_clock::now();
 
           // construct features for prediction
           vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
               " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
-          std::cout << "vwFeature:" << endl;
-          std::cout << vwFeature.c_str() << endl;
+          if (DEBUG)
+            std::cout << "vwFeature: " << vwFeature.c_str() << endl;
           ex_pred = VW::read_example(*vw, vwFeature.c_str());
 
           // get prediction --> # cores to primary VM
           vw->predict(*ex_pred);
           pred = VW::get_cost_sensitive_prediction(ex_pred);
-          std::cout << "pred = " << pred << endl;
+          if (DEBUG)
+            std::cout << "pred = " << pred << endl;
           VW::finish_example(*vw, *ex_pred);
           numPrimaryCores = std::min(std::max(pred, max + 1), totalPrimaryCores);
-          // std::cout << "numPrimaryCores = " << numPrimaryCores << endl;
+
+          stop = high_resolution_clock::now();
+          if (TIMING)
+          {
+            duration = duration_cast<microseconds>(stop - start);
+            std::cout << duration.count() << endl;
+            //time_model_inference = duration_cast<microseconds>(stop - start);
+            //std::cout << "time_model_inference (us) " << duration.count() << endl;
+          }
+          start = high_resolution_clock::now();
 
           // update cpu group using prediction
           numHvmCores = std::max(minHvmCores, totalPrimaryCores - numPrimaryCores);  // #cores to give to HVM
-          // std::cout << "numHvmCores = " << numHvmCores << endl;
+
+          stop = high_resolution_clock::now();
+          if (TIMING)
+          {
+            duration = duration_cast<microseconds>(stop - start);
+            std::cout << duration.count() << endl;
+            //time_cpugroup_update = duration_cast<microseconds>(stop - start);
+            //std::cout << "time_cpugroup_update (us) " << duration.count() << endl;
+          }
+
         }
         else
         {
           // under-prediction
+          if (DEBUG)
+            std::cout << "UNDER-PREDICTION" << endl;
           numHvmCores = minHvmCores;                              // min guaranteed # cores for HVM
           int numPrimaryCores = totalPrimaryCores - numHvmCores;  // max # cores given to primary
         }
       }
-      //std::cout << "numPrimaryCores = " << numPrimaryCores << endl;
-      //std::cout << "numHvmCores = " << numHvmCores << endl;
+
+
+      if (TIMING)
+      {
+        //std::cout << " " << endl;
+      }
+      if (DEBUG)
+      {
+        std::cout << "numPrimaryCores = " << numPrimaryCores << endl;
+        std::cout << "numHvmCores = " << numHvmCores << endl;
+      }
       ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCores(hvmGuid, numHvmCores)));
     }
   }
