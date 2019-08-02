@@ -38,6 +38,8 @@ license as described in the file LICENSE.
 #include <chrono>
 #include <algorithm>
 
+#include "cyclecounter.h"
+
 
 
 using namespace std::chrono;
@@ -72,20 +74,109 @@ UINT32 bitcount(UINT64 mask)
 #define MAX_MASKS 1024
 UINT64 hvmMasks[MAX_MASKS] = {0};
 
+
+
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
+#endif
+
+const WCHAR ARG_CSV[] = L"--csv";
+const WCHAR ARG_BUFFER[] = L"--buffer";
+const WCHAR ARG_LEARNING_MODE[] = L"--learning_mode";
+const WCHAR ARG_LEARNING_RATE[] = L"--learning_rate";
+const WCHAR ARG_DEBUG[] = L"--debug";
+
+std::wstring output_csv = L"";
+int bufferSize = -1;
+int FIXED_BUFFER_MODE = 0;
+int LEARNING_MODE = 0; 
+//1: fixed rate learning without safeguard
+//2: fixed rate learning with safeguard 
+//3: moving rate learning 
+int LEARNING_RATE = 0; //prediction window in ms
+int DEBUG = 0; //print debug messages
+
+#define shift argc--, argv++
+
+void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
+{
+  shift;
+  while (argc > 0)
+  {
+    if (0 == ::_wcsnicmp(argv[0], ARG_CSV, ARRAY_SIZE(ARG_CSV)))
+    {
+      output_csv = argv[1];
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_BUFFER, ARRAY_SIZE(ARG_BUFFER)))
+    {
+      bufferSize = _wtoi(argv[1]);
+      FIXED_BUFFER_MODE = 1;
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_MODE, ARRAY_SIZE(ARG_LEARNING_MODE)))
+    {
+      LEARNING_MODE = _wtoi(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_RATE, ARRAY_SIZE(ARG_LEARNING_RATE)))
+    {
+      LEARNING_RATE = _wtoi(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_DEBUG, ARRAY_SIZE(ARG_DEBUG)))
+    {
+      DEBUG = _wtoi(argv[1]);
+    }
+    else
+    {
+      wprintf(L"Unknown argument: %s\n", argv[0]);
+      // print_help();
+      exit(1);
+    }
+
+    shift;
+    shift;
+  }
+
+  if (LEARNING_MODE!=0)
+    FIXED_BUFFER_MODE = 0;
+
+  wcout << L"Parameters: buffer size:" << bufferSize << L" fixed buffer:" << FIXED_BUFFER_MODE << L" csv:" << output_csv
+        << L" learning_mode:" << LEARNING_MODE << L" learning_rate:" << LEARNING_RATE << L" debug:" << DEBUG << endl;
+ }
+
+
+
 /*
   optional 1st arg = buffer size
 */
-int main(int argc, char* argv[])
-{
+//int main(int argc, char* argv[])
+ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
+ {
+  process_args(argc, argv);
+
+  /************************/
+  // set up logging
+  /************************/
+  //std::wstring output_csv = L"hvmagent.csv";
+  FILE* output_fp = nullptr;
+  if (!output_csv.empty())
+  {
+    output_fp = _wfopen(output_csv.c_str(), L"w+");
+    ASSERT(output_fp != NULL);
+    fprintf(output_fp, "iteration,time_sec,idle_cores,hvm_cores,hvm_mask,hypercall_time_us\n");
+    fflush(output_fp);
+  }
+
+  CycleCounter timer;
+  timer.Start();
+
+
   /************************/
   // initialize HVMagent
   /************************/
-
   int totalPrimaryCores, delay;
+  delay = 1000; //1ms = 1000us
 
   int fixed_buffer_sleep_ms = 1;
 
-  int DEBUG = 0; // std::stoi(argv[1]);
   int debug_count = 0;
   if (DEBUG)
     std::cout << ">>> debug enabled" << endl;
@@ -99,16 +190,15 @@ int main(int argc, char* argv[])
   auto us_elapsed = duration_cast<microseconds>(stop - start);
   // auto time_data_collection, time_feature_computation, time_model_udpate, time_model_inference, time_cpugroup_update;
 
-  int FIXED_BUFFER_MODE = 0;
-  int bufferSize = 2;
-
-
-  if (argc >= 4)
+  /*
+    if (argc >= 4)
   {
-    FIXED_BUFFER_MODE = 1;
+    IXED_BUFFER_MODE = 1;
     bufferSize = std::stoi(argv[3]);
     std::cout << "bufferSize=" << bufferSize << endl;
   }
+  */
+
 
   // 1: udpate cpu group every 2ms (make a predicition every 2ms)
   // 2: update cpu group every 2ms + safeguard (make a prediction every 2ms, if underprediction give all cores to
@@ -119,8 +209,8 @@ int main(int argc, char* argv[])
   //int LEARNING_MODE = std::stoi(argv[4]);
 
   std::cout << "initing agent" << endl;
-  delay = 100;
-  totalPrimaryCores = 4;
+  delay = 1000;
+  totalPrimaryCores = 6;
   ASSERT(HVMAgent_Init(bufferSize, totalPrimaryCores, delay) == S_OK);
   std::cout << "" << endl;
   std::cout << "HVMAgent initialized" << endl;
@@ -134,19 +224,20 @@ int main(int argc, char* argv[])
   int totalCores = HVMAgent_GetPhysicalCoreCount();  // # physical cores on the whole server (min root included)
   UINT32 minRootCores = HVMAgent_GetMinRootLPs();    // # cores for min root
 
-  UINT64 busyMask, hvmMask, busyMaskPrimary;
+  UINT64 busyMask, hvmMask, busyMaskPrimary, nonIdleMask;
   int busyMaskCount, busyMaskAllCount;
   int numCoresBusyPrimary;
+  int idleCoreCount;
   int numCoresBusy;
   int numCoresBusyAll;
   int current_buffer_size;
 
-  totalPrimaryCores = 4;  // totalCores - minRootCores;  // max #cores used by primary =28-4=24 (including minHvmCores)
+  totalPrimaryCores = 6;  // totalCores - minRootCores;  // max #cores used by primary =28-4=24 (including minHvmCores)
   std::cout << "totalCores " << totalCores << endl;
   std::cout << "minRootCores " << minRootCores << endl;
   std::cout << "totalPrimaryCores " << totalPrimaryCores << endl;
 
-  int maxHvmCores = 12; // 8+4
+  int maxHvmCores = 12; // 6+6 (# of non-min-root cores)
   for (UINT32 i = 1; i <= maxHvmCores; i++)
   {
     hvmMasks[i] = HVMAgent_GenerateCoreAffinityFromBack(i); //1111110000000011000000000000 (8cores for hvm)
@@ -159,9 +250,9 @@ int main(int argc, char* argv[])
   // create CPU group for HVM
   GUID hvmGuid;
   // CLSIDFromString(L"9123CF97-AD5D-46F2-BFA3-F36950100051", (LPCLSID)&hvmGuid);
-  int minHvmCores = 8;
+  int minHvmCores = 6;
   int numHvmCores = minHvmCores;  // min guaranteed # cores for HVM
-  int numPrimaryCores = 4;        // totalPrimaryCores - numHvmCores;  // max # cores given to primary
+  int numPrimaryCores = 6;        // totalPrimaryCores - numHvmCores;  // max # cores given to primary
   int busyPrimaryCores;
   ASSERT(HVMAgent_CreateCpuGroup(&hvmGuid, numHvmCores) == S_OK);  // create a cpu group for HVM
   ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroup(hvmGuid)));
@@ -202,7 +293,7 @@ int main(int argc, char* argv[])
   // int sleep_ms = 0.05;  // 0.05ms = 50us
 
   auto start_1min = high_resolution_clock::now();
-  int PRIMARY_ALONE = 1;
+  int PRIMARY_ALONE = 0;
 
 
   while (1)
@@ -229,7 +320,6 @@ int main(int argc, char* argv[])
 
         ofstream myfile;
         myfile.open("cpu_log.csv");
-        //myfile << "test" << "\n";
 
         for (int b = 0; b < cpu_busy_b.size(); b++)
           myfile << time_b[b] << "," << cpu_busy_b[b] << "\n";
@@ -241,62 +331,40 @@ int main(int argc, char* argv[])
     }
     else if (FIXED_BUFFER_MODE)
     {
-      
-      UINT64 busyMask = HVMAgent_BusyMaskPrimary();
-      UINT64 busyCoreMask = busyMask | hvmMasks[numHvmCores];
-      UINT32 busyCount = bitcount(busyCoreMask);
-      if (HVMAgent_IsHyperThreaded())
-      {
-        busyCount /= 2;
-      }
+      //std::cout << "debug3 " << endl;
+      busyMaskPrimary = HVMAgent_BusyMaskRaw() & ~(minRootMask) & ~(hvmMasks[numHvmCores]);
+      // std::bitset<28> busyMaskAllBit(busyMaskPrimary);
+      numCoresBusyPrimary = bitcount(busyMaskPrimary);
 
-      UINT32 idleCoreCount = totalCores - busyCount;
+      nonIdleMask = HVMAgent_BusyMaskRaw() | minRootMask | hvmMasks[numHvmCores];
+      idleCoreCount = totalCores - bitcount(nonIdleMask);
+
       UINT64 prevHvmCores = numHvmCores;
+      numHvmCores = minHvmCores + idleCoreCount - bufferSize;
 
-      numHvmCores += idleCoreCount - bufferSize;
-
-      numHvmCores = std::min(numHvmCores, maxHvmCores);
-      numHvmCores = std::max(numHvmCores, minHvmCores);
-      if (prevHvmCores != numHvmCores)
-        ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCores(hvmGuid, numHvmCores)));
-      
-
-      
-      /*
-      hvmMask = HVMAgent_GenerateMaskFromBack(numHvmCores);
-      std::bitset<64> hvmBit(hvmMask);  // 64 bit
-      busyMaskAll = HVMAgent_BusyMaskPrimary();
-      std::bitset<64> cpuBusyBitAll(busyMaskAll);  // 64 bit
-      numCoresBusyAll = cpuBusyBitAll.count();
-      busyMask = HVMAgent_BusyMaskPrimary() & (~hvmMask);  // read number of busy logical cores of all cores (excluding hvm cores) on the server
-      std::bitset<64> cpuBusyBit(busyMask);  // 64 bit
-
-      numCoresBusy = cpuBusyBit.count();  // # busy physical cores
-      if (HVMAgent_IsHyperThreaded())
-        numCoresBusy /= 2;
-
-      numCoresBusyPrimary = numCoresBusy - minRootCores;  // # busy physical cores used by primary (excluding minRootCores)
-      current_buffer_size = numPrimaryCores - numCoresBusyPrimary;
-
-      if (current_buffer_size < bufferSize)
+      if (DEBUG)
       {
-        stop = high_resolution_clock::now();
-        us_elapsed = duration_cast<microseconds>(stop - start);
-        if (us_elapsed.count() >= 2000)
-        {
-          numHvmCores = std::max(
-              minHvmCores, minHvmCores + (totalPrimaryCores - numCoresBusyPrimary));  // # phsyical cores to give to HVM
-          // numHvmCores = std::max(minHvmCores, totalPrimaryCores - (numCoresBusyPrimary + bufferSize));  // # phsyical
-          // cores to give to HVM
-          ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCores(hvmGuid, numHvmCores)));
-
-          // if (DEBUG)
-          std::cout << "updated numHvmCores to " << numHvmCores << endl;
-          start = high_resolution_clock::now();
-        }
-        
+        cout << "totalCores " << totalCores << endl;
+        cout << "nonIdleMask.count " << bitcount(nonIdleMask) << endl;
+        cout << "idleCoreCount " << idleCoreCount << endl;
       }
 
+      if (prevHvmCores != numHvmCores)
+      {
+        ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCores(hvmGuid, numHvmCores)));
+
+        if (output_fp)
+        {
+          double time = timer.ElapsedMicroseconds() / 1000000.0;
+          fprintf(
+              output_fp, "%d,%.3lf,%d,%d,0x%x,%d\n", count, time, idleCoreCount, numHvmCores, hvmMasks[numHvmCores], 0);
+        }
+      }
+       
+
+      HVMAgent_SpinUS(delay);
+
+      /*
       if (DEBUG)
       {
         std::cout << "hvmBit " << hvmBit << endl;
@@ -318,6 +386,9 @@ int main(int argc, char* argv[])
     }
     else
     {
+
+      UINT64 prevHvmCores = numHvmCores;
+
       sum = 0;
 
       count = 0;
@@ -332,7 +403,7 @@ int main(int argc, char* argv[])
         stop = high_resolution_clock::now();
         us_elapsed = duration_cast<microseconds>(stop - start);
 
-        if (us_elapsed.count() >= 2000)
+        if (us_elapsed.count() >= LEARNING_RATE*1000)
         {
           if (DEBUG)
           {
@@ -342,31 +413,15 @@ int main(int argc, char* argv[])
           break;
         }
         
-        // TODO: sleep for 50us --> time how long the loop takes
-        UINT64 busyMask = HVMAgent_BusyMaskPrimary(); 
-        UINT32 numCoresBusyPrimary = bitcount(busyMask) - minRootCores;
-
-        /*
-        hvmMask = HVMAgent_GenerateMaskFromBack(numHvmCores);
-        busyMask = HVMAgent_BusyMaskPrimary() & (~hvmMask);                        // i % total_cpu; // read number of busy cores of all cores on the server
-        std::bitset<64> cpuBusyBit(busyMask);  // 64 bit
-        numCoresBusyPrimary = (cpuBusyBit.count() - minRootCores);  // # busy physical cores used by primary (with minRootCores subtracted)
-        */
+         busyMaskPrimary = HVMAgent_BusyMaskRaw() & ~(minRootMask) & ~(hvmMasks[numHvmCores]);
+        // std::bitset<28> busyMaskAllBit(busyMaskPrimary);
+        numCoresBusyPrimary = bitcount(busyMaskPrimary);
+        UINT32 idleCoreCount = totalPrimaryCores - numCoresBusyPrimary;
 
         if (HVMAgent_IsHyperThreaded())
           numCoresBusyPrimary /= 2;
  
-        /*
-        if (DEBUG)
-        {
-          std::bitset<64> hvm_busy_bit(hvmMask);  // 64 bit
-          std::cout << "hvmMask (LP) " << hvm_busy_bit << endl;
-          std::cout << "busyMask (LP) " << cpuBusyBit << endl;
-          std::cout << numCoresBusyPrimary << " busy physical cores " << endl;
-        }
-        */
         cpu_busy_a.push_back(numCoresBusyPrimary);  // record cpu reading
-        cpu_busy_b.push_back(numCoresBusyPrimary);  // record all cpu readings
 
         sum += numCoresBusyPrimary;
         if (numCoresBusyPrimary < min)
@@ -431,17 +486,15 @@ int main(int argc, char* argv[])
         std::cout << "Using vw learning" << endl;
         first_window = 0;
         numHvmCores = minHvmCores;  // min guaranteed # cores for HVM
-        numPrimaryCores = totalPrimaryCores - numHvmCores;
+        //numPrimaryCores = numPrimaryCores;
       }
       else
       {
         start = high_resolution_clock::now();
-        if (max < numPrimaryCores)
+        if (LEARNING_MODE == 1 || max < numPrimaryCores)
         {
           // over-prediction
           // create cost label
-
-
           vwLabel.clear();
           for (int k = 1; k < totalPrimaryCores + 1; k++)
           {
@@ -487,8 +540,7 @@ int main(int argc, char* argv[])
           if (DEBUG)
             std::cout << "pred = " << pred << endl;
           VW::finish_example(*vw, *ex_pred);
-          //numPrimaryCores = std::min(std::max(pred, max + 1), totalPrimaryCores);
-          numPrimaryCores = std::min(std::max(pred, max + 1), 4);
+          numPrimaryCores = std::min(std::max(pred, max + 1), totalPrimaryCores);
 
           if (TIMING)
           {
@@ -501,7 +553,7 @@ int main(int argc, char* argv[])
           }
 
           // update cpu group using prediction
-          numHvmCores = std::max(minHvmCores, totalPrimaryCores - numPrimaryCores);  // #cores to give to HVM
+          numHvmCores = std::max(minHvmCores, maxHvmCores - numPrimaryCores);  // #cores to give to HVM
 
           if (TIMING)
           {
@@ -518,20 +570,27 @@ int main(int argc, char* argv[])
           if (DEBUG)
             std::cout << "UNDER-PREDICTION" << endl;
           numHvmCores = minHvmCores;                              // min guaranteed # cores for HVM
-          int numPrimaryCores = 4; // totalPrimaryCores - numHvmCores;  // max # cores given to primary
+          int numPrimaryCores = totalPrimaryCores;  // totalPrimaryCores - numHvmCores;  // max # cores given to primary
         }
       }
 
-      if (TIMING)
-      {
-        // std::cout << " " << endl;
-      }
       if (DEBUG)
       {
         std::cout << "numPrimaryCores = " << numPrimaryCores << endl;
         std::cout << "numHvmCores = " << numHvmCores << endl;
       }
-      ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCores(hvmGuid, numHvmCores)));
+
+
+      if (prevHvmCores != numHvmCores)
+      {
+        ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCores(hvmGuid, numHvmCores)));
+      }
+
+      if (output_fp)
+      {
+        double time = timer.ElapsedMicroseconds() / 1000000.0;
+        fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d\n", count, time, idleCoreCount, numHvmCores, hvmMasks[numHvmCores], 0);
+      }
     }
   }
 
