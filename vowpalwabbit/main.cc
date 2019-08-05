@@ -366,6 +366,9 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
       UINT64 prevHvmCores = numHvmCores;
       numHvmCores = numHvmCores + idleCoreCount - bufferSize;
 
+      numHvmCores = std::min(numHvmCores, maxHvmCores);  // curHvmCores + 1);
+      numHvmCores = std::max(numHvmCores, minHvmCores);
+
       if (DEBUG)
       {
         cout << "totalCores " << totalCores << endl;
