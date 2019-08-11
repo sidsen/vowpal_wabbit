@@ -6,10 +6,10 @@
 // freq                 cycles --> 1 second
 // freq / 1,000,000,000 cycles --> 1 nanosecond
 // n cycles                    --> n / freq / 1,000,000,000
-#define CYCLES_TO_NS(cycles, freq) (((cycles) * 1000000000) / (freq))
-#define CYCLES_TO_US(cycles, freq) (((cycles) * 1000000) / (freq))
-#define CYCLES_TO_MS(cycles, freq) (((cycles) * 1000) / (freq))
-#define NS_TO_CYCLES(ns, freq) (((ns) * (freq)) / 1000000000)
+#define CYCLES_TO_NS(cycles, freq) ((cycles) / ((freq) / 1000000000.0))
+#define CYCLES_TO_US(cycles, freq) ((cycles) / ((freq) / 1000000.0))
+#define CYCLES_TO_MS(cycles, freq) ((cycles) / ((freq) / 1000.0))
+#define NS_TO_CYCLES(ns, freq) ((ns) * ((freq) / 1000000000.0))
 
 using namespace std;
 
@@ -41,9 +41,19 @@ public:
         return now;
     }
 
+    UINT64 NowNS()
+    {
+        return (UINT64) CYCLES_TO_NS(Now().QuadPart, frequency.QuadPart);
+    }
+
+    UINT64 NowUS()
+    {
+        return (UINT64) CYCLES_TO_US(Now().QuadPart, frequency.QuadPart);
+    }
+
     void Add(LARGE_INTEGER &a, UINT64 nanoseconds)
     {
-        a.QuadPart += NS_TO_CYCLES(nanoseconds, frequency.QuadPart);
+        a.QuadPart += (UINT64) NS_TO_CYCLES(nanoseconds, frequency.QuadPart);
     }
 
     void SpinUntil(LARGE_INTEGER timeout)
@@ -65,7 +75,7 @@ public:
 
     UINT64 TotalMS()
     {
-        return CYCLES_TO_MS(sum.QuadPart, frequency.QuadPart);
+        return (UINT64) CYCLES_TO_MS(sum.QuadPart, frequency.QuadPart);
     }
 
     LARGE_INTEGER DiffInCycles()
@@ -77,7 +87,12 @@ public:
 
     UINT64 DiffInNanoseconds()
     {
-        return CYCLES_TO_NS(end.QuadPart - start.QuadPart, frequency.QuadPart);
+        return (UINT64) CYCLES_TO_NS(end.QuadPart - start.QuadPart, frequency.QuadPart);
+    }
+
+    UINT64 DiffInUS()
+    {
+        return (UINT64) CYCLES_TO_US(end.QuadPart - start.QuadPart, frequency.QuadPart);
     }
 
     UINT64 GetCount()
@@ -85,10 +100,20 @@ public:
         return count;
     }
 
-    UINT64 ElapsedMicroseconds()
+    UINT64 ElapsedUS()
     {
         LARGE_INTEGER now;
         QueryPerformanceCounter(&now);
-        return CYCLES_TO_NS(now.QuadPart - start.QuadPart, frequency.QuadPart) / 1000;
+        return (UINT64) CYCLES_TO_US(now.QuadPart - start.QuadPart, frequency.QuadPart);
+    }
+
+    double ElapsedMS()
+    {
+        return ElapsedUS() / 1000.0;
+    }
+
+    double ElapsedSeconds()
+    {
+        return ElapsedMS() / 1000.0;
     }
 };

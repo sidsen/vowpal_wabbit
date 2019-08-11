@@ -33,6 +33,7 @@ typedef struct _CpuInfo
 extern "C" void sprintf_guid(GUID guid, char* buf);
 
 extern "C" HRESULT HVMAgent_Init(CpuInfo *cpuInfo);
+extern "C" void HVMAgent_ResetStrings();
 
 extern "C" UINT64 HVMAgent_GenerateCoreAffinityFromBack(UINT32 cores);
 extern "C" UINT64 HVMAgent_GenerateCoreAffinityFromFront(UINT32 cores);
