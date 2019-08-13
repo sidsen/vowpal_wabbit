@@ -76,6 +76,37 @@ UINT64 hvmMasks[MAX_MASKS] = {0};
 #define MAX_HVM_CORES 12
 #define MIN_HVM_CORES 6
 
+
+CpuInfo cpuInfo;
+std::unordered_map<UINT32, GUID> cpuGroups;
+
+UINT64 primaryMask = 0;
+UINT64 hvmMask = 0;
+UINT64 idleCoreMask = 0;
+UINT64 idleCoreCount = 0;
+GUID hvmGuid = GUID_NULL;
+GUID primaryGuid = GUID_NULL;
+UINT64 busyMaskPrimary = 0;
+UINT64 numCoresBusyPrimary = 0;
+
+enum Mode
+{
+  INVALID,
+  IPI,
+  NEWIPI,
+  CPUGROUPS
+};
+
+
+int maxHvmCores = MAX_HVM_CORES;  // 6+6 (# of non-min-root cores)
+int minHvmCores = MIN_HVM_CORES;
+int numHvmCores = minHvmCores;  // # cores given to HVM
+INT32 prevHvmCores = numHvmCores;
+int totalPrimaryCores = TOTAL_PRIMARY_CORE;
+Mode mode;
+std::wstring primaryName = L"LatSensitive";
+
+
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
 #endif
@@ -203,10 +234,9 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
         << TIMING << L" no_harvesting: " << NO_HARVESTING << L" primary_alone:" << PRIMARY_ALONE << L" feedback:"
         << FEEDBACK << L" feedback_ms:" << FEEDBACK_MS << L" mode:" << MODE << std::endl;
 
-  if (MODE == L"IPI")
-    wcout << "Mode: IPI" << endl;
-  if (MODE == L"CPUGROUPS")
-    wcout << "Mode: CPUGROUPS" << endl;
+  wcout << "MAX_HVM_CORES " << MAX_HVM_CORES << std::endl;
+  wcout << "MIN_HVM_CORES" << MIN_HVM_CORES << std::endl;
+
 }
 
 /************************/
@@ -222,45 +252,6 @@ int overpredcited(int busyCores, int pred, int totalPrimaryCores)
     return 0;
 }
 
-CpuInfo cpuInfo;
-std::unordered_map<UINT32, GUID> cpuGroups;
-
-enum Mode
-{
-  INVALID,
-  IPI,
-  CPUGROUPS
-};
-
-#if 0
-UINT32 getNewHvmCores(INT32 curHvmCores, INT32 *idleCoreCount)
-{
-    UINT64 busyCoreMask = HVMAgent_BusyMaskRaw();
-
-    // Mark HVM Cores are busy.
-    busyCoreMask |= hvmMasks[curHvmCores];
-
-    // Mark Minroot cores are busy.
-    busyCoreMask |= cpuInfo.MinRootMask;
-
-    UINT32 busyCount = bitcount(busyCoreMask);
-    if (cpuInfo.IsHyperThreaded)
-    {
-        busyCount /= 2;
-    }
-
-    *idleCoreCount = cpuInfo.PhysicalCores - busyCount;
-
-    //printf("Idle cores: %d, mask: 0x%lx, finalMask: 0x%lx, numHvmCores: %d\n", idleCoreCount, busyMask, busyCoreMask, numHvmCores);
-
-    INT32 newHvmCores = curHvmCores + *idleCoreCount - config.bufferSize;
-
-    newHvmCores = min(newHvmCores, maxHvmCores); // curHvmCores + 1);
-    newHvmCores = max(newHvmCores, minHvmCores);
-
-    return newHvmCores;
-}
-#endif
 
 void setupCpuGroups(Mode mode, INT32 numHvmCores, INT32 maxHvmCores, GUID* hvmGuid)
 {
@@ -280,7 +271,7 @@ void setupCpuGroups(Mode mode, INT32 numHvmCores, INT32 maxHvmCores, GUID* hvmGu
 
     *hvmGuid = cpuGroups[numHvmCores];
   }
-  else if (mode == IPI)
+  else if (mode == IPI || mode == NEWIPI)
   {
     ASSERT(SUCCEEDED(HVMAgent_CreateCpuGroupFromBack(hvmGuid, numHvmCores)));
     char buf[128];
@@ -300,7 +291,7 @@ void setupCpuGroups(Mode mode, INT32 numHvmCores, INT32 maxHvmCores, GUID* hvmGu
   fflush(stdout);
 }
 
-void update_hvm(const GUID& guid, Mode mode, INT32 numCores)
+void update_hvm(Mode mode, INT32 numCores)
 {
   if (mode == CPUGROUPS)
   {
@@ -308,14 +299,109 @@ void update_hvm(const GUID& guid, Mode mode, INT32 numCores)
   }
   else if (mode == IPI)
   {
-    ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCores(guid, numCores)));
+    ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCores(hvmGuid, numCores)));
   }
-  else
+  else if (mode == NEWIPI)
+  {
+    if (numCores < prevHvmCores)
+    {
+      INT32 delta = prevHvmCores - numCores;
+      // Shrinking Hvm, growing primary
+      // Shrink Hvm from front:
+      for (INT32 i = 0; i < (INT32)cpuInfo.PhysicalCores && delta > 0; i++)
+      {
+        UINT64 coreMask = 1LL << i;
+        if (hvmMask & coreMask)
+        {
+          hvmMask &= ~coreMask;
+          primaryMask |= coreMask;
+          delta--;
+        }
+      }
+    }
+    else
+    {
+      INT32 delta = numCores - prevHvmCores;
+      // Growing Hvm, shrinking primary
+      // Grow Hvm by picking cores from the idle mask;
+      ASSERT(idleCoreMask & primaryMask);
+
+      for (INT32 i = (INT32)cpuInfo.PhysicalCores - 1; i >= 0 && delta > 0; i--)
+      {
+        UINT64 coreMask = 1LL << i;
+        if (idleCoreMask & coreMask)
+        {
+          hvmMask |= coreMask;
+          primaryMask &= ~coreMask;
+          delta--;
+        }
+      }
+    }
+    cout << "hvmMask: " << hvmMask << " primaryMask: " << primaryMask << endl;
+    ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCoresUsingMask(hvmGuid, hvmMask)));
+    ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCoresUsingMask(primaryGuid, primaryMask)));
+  }
+  else 
   {
     ASSERT(FALSE);
   }
 }
 
+void resetCpuGroups(double elapsedSeconds)
+{
+  HVMAgent_ResetStrings();
+  ASSERT(SUCCEEDED(HVMAgent_CreateCpuGroupFromBack(&hvmGuid, minHvmCores)));
+  ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroup(hvmGuid)));
+
+  numHvmCores = prevHvmCores = minHvmCores;
+  hvmMask = hvmMasks[minHvmCores];
+
+  primaryMask = HVMAgent_GenerateCoreAffinityFromFront(totalPrimaryCores);
+  ASSERT(SUCCEEDED(HVMAgent_PinPrimary(primaryName, totalPrimaryCores, &primaryGuid)));
+
+  char buf[128];
+  sprintf_guid(hvmGuid, buf);
+  printf("%.4lf: WARNING: Potential IPI failure; created new CpuGroup with %d cores: %s\n", elapsedSeconds, numHvmCores,
+      buf);
+}
+
+UINT32 getNewHvmCores(INT32 curHvmCores) //, INT32 *idleCoreCount)
+{
+    // Mark Minroot cores are busy.
+    UINT64 busyCoreMask = HVMAgent_BusyMaskRaw() | cpuInfo.MinRootMask;
+
+    // Mark HVM Cores are busy.
+    if (mode == NEWIPI)
+    {
+        busyCoreMask |= hvmMask;
+    }
+    else
+    {
+        busyCoreMask |= hvmMasks[curHvmCores];
+    }
+
+    idleCoreMask = primaryMask & ~busyCoreMask;
+    idleCoreCount = bitcount(idleCoreMask);
+
+    if (cpuInfo.IsHyperThreaded)
+    {
+        idleCoreCount /= 2;
+    }
+
+    //idleCoreCount = cpuInfo.PhysicalCores - busyCount;
+
+    INT32 newHvmCores = curHvmCores + idleCoreCount - bufferSize;
+
+    newHvmCores = min(newHvmCores, maxHvmCores); // curHvmCores + 1);
+    newHvmCores = max(newHvmCores, minHvmCores);
+
+    busyMaskPrimary = primaryMask & ~idleCoreMask;
+    numCoresBusyPrimary = bitcount(busyMaskPrimary);
+
+    printf("Idle cores: %d, idle mask: %#06x, busyCoreMask: %#06x, numHvmCores: %d\n", idleCoreCount, idleCoreMask,
+        busyCoreMask, newHvmCores);
+    return newHvmCores;
+}
 /*
   optional 1st arg = buffer size
 */
@@ -336,7 +422,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
     ASSERT(output_fp != NULL);
     if (FIXED_BUFFER_MODE || NO_HARVESTING)
       fprintf(output_fp,
-          "iteration,time_sec,idle_cores,hvm_cores,hvm_mask,hypercall_time_us,busyMask,primary_busy_cores,cpu_max,"
+          "iteration,time_sec,idle_cores,hvm_cores,hvm_mask,hypercall_time_us,primary_busy_cores,cpu_max,"
           "potential_ipi_failure\n");
     else
       fprintf(output_fp,
@@ -360,10 +446,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   /************************/
   // HVMagent
   /************************/
-  UINT64 rawBusyMask, busyMask, hvmMask, busyMaskPrimary, nonIdleMask;
+  UINT64 rawBusyMask, busyMask, nonIdleMask;
   int busyMaskCount, busyMaskAllCount;
-  int numCoresBusyPrimary;
-  int idleCoreCount;
   int numCoresBusy;
   int numCoresBusyAll;
 
@@ -372,14 +456,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
   std::cout << "HVMAgent initialized" << endl;
 
-  int totalPrimaryCores, delay_us;
-  totalPrimaryCores = TOTAL_PRIMARY_CORE;
+  int delay_us;
   delay_us = DELAY_MS * 1000;
-
-  // pin primary vm
-  std::wstring primaryName = L"LatSensitive";
-  ASSERT(SUCCEEDED(HVMAgent_PinPrimary(primaryName, totalPrimaryCores)));
-  std::cout << "Pinned primary vm to " << totalPrimaryCores << "cores" << endl;
 
   // read server CPU info from HVMagent
   int totalCores = cpuInfo.PhysicalCores;      // # physical cores on the whole server (min root included)
@@ -391,28 +469,29 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   std::cout << "totalPrimaryCores " << totalPrimaryCores << endl;
 
   // create hvm masks
-  int maxHvmCores = MAX_HVM_CORES;  // 6+6 (# of non-min-root cores)
-  for (UINT32 i = 1; i <= maxHvmCores; i++)
+  // assign initial cores to vms
+
+  int numPrimaryCores = totalPrimaryCores;  // totalPrimaryCores - numHvmCores =  # cores given to primary
+  int busyPrimaryCores;
+
+  // pin primary vm
+  primaryMask = HVMAgent_GenerateCoreAffinityFromFront(totalPrimaryCores);
+  ASSERT(SUCCEEDED(HVMAgent_PinPrimary(primaryName, totalPrimaryCores, &primaryGuid)));
+  std::cout << "Pinned primary vm to " << totalPrimaryCores << "cores" << endl;
+
+  for (UINT32 i = 1; i <= cpuInfo.PhysicalCores; i++)
   {
     hvmMasks[i] = HVMAgent_GenerateCoreAffinityFromBack(i);  // 1111110000000011000000000000 (8cores for hvm)
     printf("Created bully mask with %d cores: %x\n", i, hvmMasks[i]);
   }
-
-  // assign initial cores to vms
-  int minHvmCores = MIN_HVM_CORES;
-  int numHvmCores = minHvmCores;  // # cores given to HVM
-  int prevHvmCores;
-  int numPrimaryCores = totalPrimaryCores;  // totalPrimaryCores - numHvmCores =  # cores given to primary
-  int busyPrimaryCores;
-
-  // create CPU group for HVM
-  GUID hvmGuid;
-  Mode mode;
+  hvmMask = hvmMasks[numHvmCores];
 
   if (MODE == L"IPI")
     mode = IPI;
   else if (MODE == L"CPUGROUPS")
     mode = CPUGROUPS;
+  else if (MODE == L"NEWIPI")
+    mode = NEWIPI;
   else
   {
     cout << "Invalid mode" << endl;
@@ -474,7 +553,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   while (timer.ElapsedSeconds() < RUN_DURATION_SEC)
   {
     debug_count++;
-    if (DEBUG & debug_count > 6)
+    if (DEBUG && debug_count > 6)
       break;
 
     if (NO_HARVESTING)
@@ -482,20 +561,12 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCores(hvmGuid, numHvmCores)));
       start = high_resolution_clock::now();
       max = 0;  // reset max
+      INT32 newHvmCores = 0;
 
       while (true)
       {
-        rawBusyMask = HVMAgent_BusyMaskRaw();
-        busyMask = rawBusyMask & ~(minRootMask);
-        busyMaskPrimary = rawBusyMask & ~(minRootMask) & ~(hvmMasks[numHvmCores]);
-        // std::bitset<28> busyMaskAllBit(busyMaskPrimary);
-        numCoresBusyPrimary = bitcount(busyMaskPrimary);
-
-        nonIdleMask = rawBusyMask | minRootMask | hvmMasks[numHvmCores];
-        idleCoreCount =
-            totalCores - bitcount(nonIdleMask);  // idle cores from those belonged to primary (idleCoreCount +
-                                                 // numCoresBusyPrimary = totalCores - minroot - numHvmCores)
-
+        newHvmCores = getNewHvmCores(numHvmCores);
+        
         if (numCoresBusyPrimary > max)
           max = numCoresBusyPrimary;
 
@@ -505,11 +576,13 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           break;  // log max from every 2ms
       }
 
+      numHvmCores = newHvmCores;
+
       if (output_fp)
       {
         double time = timer.ElapsedUS() / 1000000.0;
-        fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,0x%x,%d,%d,%d\n", count, time, idleCoreCount, numHvmCores,
-            hvmMasks[numHvmCores], 0, busyMask, numCoresBusyPrimary, max, ipiFailCount);
+        fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,%d,%d,%d\n", count, time, idleCoreCount, numHvmCores,
+            hvmMasks[numHvmCores], 0, numCoresBusyPrimary, max, ipiFailCount);
       }
     }
 
@@ -517,19 +590,11 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
     {
       start = high_resolution_clock::now();
       max = 0;  // reset max
+      INT32 newHvmCores = 0;
 
       while (true)
       {
-        rawBusyMask = HVMAgent_BusyMaskRaw();
-        busyMask = rawBusyMask & ~(minRootMask);
-        busyMaskPrimary = rawBusyMask & ~(minRootMask) & ~(hvmMasks[numHvmCores]);
-        // std::bitset<28> busyMaskAllBit(busyMaskPrimary);
-        numCoresBusyPrimary = bitcount(busyMaskPrimary);
-
-        nonIdleMask = rawBusyMask | minRootMask | hvmMasks[numHvmCores];
-        idleCoreCount =
-            totalCores - bitcount(nonIdleMask);  // idle cores from those belonged to primary (idleCoreCount +
-                                                 // numCoresBusyPrimary = totalCores - minroot - numHvmCores)
+        newHvmCores = getNewHvmCores(numHvmCores);
 
         if (numCoresBusyPrimary > max)
           max = numCoresBusyPrimary;
@@ -538,22 +603,19 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         us_elapsed = duration_cast<microseconds>(stop - start);
         if (us_elapsed.count() >= delay_us)
           break;  // log max from delay_us
+
       }
 
-      numHvmCores = numHvmCores + idleCoreCount - bufferSize;
+      numHvmCores = newHvmCores;
+
+      //numHvmCores = numHvmCores + idleCoreCount - bufferSize;
       numHvmCores = std::min(numHvmCores, maxHvmCores);  // curHvmCores + 1);
       numHvmCores = std::max(numHvmCores, minHvmCores);
 
-      if (numHvmCores == prevHvmCores && mode == IPI && timer.ElapsedMS() > prevIpiTimestampMS + ipiTimeoutMS)
+      if (numHvmCores == prevHvmCores && (mode == IPI || mode == NEWIPI)  &&
+          timer.ElapsedMS() > prevIpiTimestampMS + ipiTimeoutMS)
       {
-        HVMAgent_ResetStrings();
-        ASSERT(SUCCEEDED(HVMAgent_CreateCpuGroupFromBack(&hvmGuid, numHvmCores)));
-        ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroup(hvmGuid)));
-
-        char buf[128];
-        sprintf_guid(hvmGuid, buf);
-        printf("%.4lf: WARNING: Potential IPI failure; created new CpuGroup with %d cores: %s\n",
-            timer.ElapsedSeconds(), numHvmCores, buf);
+        resetCpuGroups(timer.ElapsedSeconds());
 
         prevIpiTimestampMS = timer.ElapsedMS();
         ipiFailCount++;
@@ -561,7 +623,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
       else if (prevHvmCores != numHvmCores)
       {
-        update_hvm(hvmGuid, mode, numHvmCores);
+        update_hvm(mode, numHvmCores);
         count++;
         prevHvmCores = numHvmCores;
 
@@ -571,8 +633,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       if (output_fp)
       {
         double time = timer.ElapsedUS() / 1000000.0;
-        fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,0x%x,%d,%d,%d\n", count, time, idleCoreCount, numHvmCores,
-            hvmMasks[numHvmCores], 0, busyMask, numCoresBusyPrimary, max, ipiFailCount);
+        fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,%d,%d,%d\n", count, time, idleCoreCount, numHvmCores,
+            hvmMasks[numHvmCores], 0, numCoresBusyPrimary, max, ipiFailCount);
       }
 
       HVMAgent_SpinUS(sleep_us);  // sleep for 1ms for cpu affinity call (if issued) to take effects
@@ -632,7 +694,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             numPrimaryCores = totalPrimaryCores;  // totalPrimaryCores - numHvmCores;  // max # cores given to primary
             if (prevHvmCores != numHvmCores)
             {
-              update_hvm(hvmGuid, mode, numHvmCores);
+              update_hvm(mode, numHvmCores);
               HVMAgent_SpinUS(sleep_us);
               count++;
               prevHvmCores = numHvmCores;
@@ -682,7 +744,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             // update hvm size
             if (prevHvmCores != numHvmCores)
             {
-              update_hvm(hvmGuid, mode, numHvmCores);
+              update_hvm(mode, numHvmCores);
               HVMAgent_SpinUS(sleep_us);
               count++;
               prevHvmCores = numHvmCores;
@@ -774,7 +836,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
         if (LEARNING_MODE == 1 || LEARNING_MODE == 2)
         {  // mode 1&2 need to decide overprediction here
-          if (max < numPrimaryCores | numPrimaryCores == totalPrimaryCores)
+          if (max < numPrimaryCores || numPrimaryCores == totalPrimaryCores)
             overpredicted = 1;
           else
             overpredicted = 0;
@@ -894,7 +956,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       /****** update CPU affinity ******/
       if (prevHvmCores != numHvmCores)
       {
-        update_hvm(hvmGuid, mode, numHvmCores);
+        update_hvm(mode, numHvmCores);
         HVMAgent_SpinUS(sleep_us);
         count++;
         prevHvmCores = numHvmCores;
@@ -908,16 +970,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
       else
       {
-        if (numHvmCores == prevHvmCores && mode == IPI && timer.ElapsedMS() > prevIpiTimestampMS + ipiTimeoutMS)
+        if (numHvmCores == prevHvmCores && (mode == IPI || mode == NEWIPI ) && timer.ElapsedMS() > prevIpiTimestampMS + ipiTimeoutMS)
         {
-          HVMAgent_ResetStrings();
-          ASSERT(SUCCEEDED(HVMAgent_CreateCpuGroupFromBack(&hvmGuid, numHvmCores)));
-          ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroup(hvmGuid)));
-
-          char buf[128];
-          sprintf_guid(hvmGuid, buf);
-          printf("%.4lf: WARNING: Potential IPI failure; created new CpuGroup with %d cores: %s\n",
-              timer.ElapsedSeconds(), numHvmCores, buf);
+          resetCpuGroups(timer.ElapsedSeconds());
 
           prevIpiTimestampMS = timer.ElapsedMS();
           ipiFailCount++;

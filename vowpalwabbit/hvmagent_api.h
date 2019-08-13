@@ -41,14 +41,15 @@ extern "C" UINT64 HVMAgent_GenerateCoreAffinityFromFront(UINT32 cores);
 extern "C" UINT64 HVMAgent_BusyMaskRaw();
 extern "C" HRESULT HVMAgent_SpinUS(UINT64 delayUS);
 
-extern "C" HRESULT HVMAgent_UpdateHVMCores(GUID hvmGuid, UINT32 numHVMCores);
+extern "C" HRESULT HVMAgent_UpdateHVMCores(GUID guid, UINT32 numHVMCores);
+extern "C" HRESULT HVMAgent_UpdateHVMCoresUsingMask(GUID guid, UINT64 affinityMask);
 
 extern "C" HRESULT HVMAgent_CreateCpuGroup(GUID *guid, UINT64 affinity);
 extern "C" HRESULT HVMAgent_CreateCpuGroupFromFront(GUID *guid, UINT32 numCores);
 extern "C" HRESULT HVMAgent_CreateCpuGroupFromBack(GUID *guid, UINT32 numCores);
 
 extern "C" HRESULT HVMAgent_GetVMHandle(const std::wstring vmname, HCS_SYSTEM *handle);
-extern "C" HRESULT HVMAgent_PinPrimary(const std::wstring vmname, UINT32 numCores);
+extern "C" HRESULT HVMAgent_PinPrimary(const std::wstring vmname, UINT32 numCores, GUID *guid);
 
 extern "C" HRESULT HVMAgent_AssignCpuGroup(GUID guid);
 extern "C" HRESULT HVMAgent_AssignCPUGroupToVM(HCS_SYSTEM vmHandle, GUID cpuGroup);
