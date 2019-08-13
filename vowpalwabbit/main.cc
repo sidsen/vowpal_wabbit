@@ -365,7 +365,7 @@ void resetCpuGroups(double elapsedSeconds)
       buf);
 }
 
-UINT32 getNewHvmCores(INT32 curHvmCores) //, INT32 *idleCoreCount)
+void updateIdleMask(INT32 curHvmCores)
 {
     // Mark Minroot cores are busy.
     UINT64 busyCoreMask = HVMAgent_BusyMaskRaw() | cpuInfo.MinRootMask;
@@ -388,18 +388,23 @@ UINT32 getNewHvmCores(INT32 curHvmCores) //, INT32 *idleCoreCount)
         idleCoreCount /= 2;
     }
 
+    busyMaskPrimary = primaryMask & ~idleCoreMask;
+    numCoresBusyPrimary = bitcount(busyMaskPrimary);
+
+    //printf("Idle cores: %d, idle mask: %#06x, busyCoreMask: %#06x\n", idleCoreCount, idleCoreMask, busyCoreMask);
+}
+
     //idleCoreCount = cpuInfo.PhysicalCores - busyCount;
+
+UINT32 getNewHvmCores(INT32 curHvmCores) //, INT32 *idleCoreCount)
+{
+    updateIdleMask(curHvmCores);
 
     INT32 newHvmCores = curHvmCores + idleCoreCount - bufferSize;
 
     newHvmCores = min(newHvmCores, maxHvmCores); // curHvmCores + 1);
     newHvmCores = max(newHvmCores, minHvmCores);
 
-    busyMaskPrimary = primaryMask & ~idleCoreMask;
-    numCoresBusyPrimary = bitcount(busyMaskPrimary);
-
-    printf("Idle cores: %d, idle mask: %#06x, busyCoreMask: %#06x, numHvmCores: %d\n", idleCoreCount, idleCoreMask,
-        busyCoreMask, newHvmCores);
     return newHvmCores;
 }
 /*
@@ -426,7 +431,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           "potential_ipi_failure\n");
     else
       fprintf(output_fp,
-          "iteration,time_sec,idle_cores,hvm_cores,hvm_mask,hypercall_time_us,busy_mask,primary_busy_cores,f_min,f_max,"
+          "iteration,time_sec,idle_cores,hvm_cores,hvm_mask,hypercall_time_us,primary_busy_cores,f_min,f_max,"
           "f_avg,f_stddev,f_med,pred_peak,upper_bound,cpu_max,overpredicted,safeguard,feedback_max\n");
 
     fflush(output_fp);
@@ -659,14 +664,15 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       /* collect cpu data for vw learning window */
       while (true)
       {
-        rawBusyMask = HVMAgent_BusyMaskRaw();
-        busyMask = rawBusyMask & ~(minRootMask);
-        busyMaskPrimary = rawBusyMask & ~(minRootMask) & ~(hvmMasks[numHvmCores]);
-        // std::bitset<28> busyMaskAllBit(busyMaskPrimary);
-        numCoresBusyPrimary = bitcount(busyMaskPrimary);
+        updateIdleMask(numHvmCores);
+        //rawBusyMask = HVMAgent_BusyMaskRaw();
+        //busyMaskPrimary = rawBusyMask & primaryMask;
 
-        nonIdleMask = rawBusyMask | minRootMask | hvmMasks[numHvmCores];
-        idleCoreCount = totalCores - bitcount(nonIdleMask);
+        // std::bitset<28> busyMaskAllBit(busyMaskPrimary);
+        //numCoresBusyPrimary = bitcount(busyMaskPrimary);
+
+        //nonIdleMask = rawBusyMask | minRootMask | hvmMasks[numHvmCores];
+        //idleCoreCount = totalCores - bitcount(nonIdleMask);
 
         // record cpu reading
         cpu_busy_a.push_back(numCoresBusyPrimary);
@@ -692,6 +698,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             // give all cores back to primary for mode3
             numHvmCores = minHvmCores;            // min guaranteed # cores for HVM
             numPrimaryCores = totalPrimaryCores;  // totalPrimaryCores - numHvmCores;  // max # cores given to primary
+
             if (prevHvmCores != numHvmCores)
             {
               update_hvm(mode, numHvmCores);
@@ -701,8 +708,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               if (output_fp)
               {
                 double time = timer.ElapsedUS() / 1000000.0;
-                fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,0x%x,%d,%d,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d\n", count, time,
-                    idleCoreCount, numHvmCores, hvmMasks[numHvmCores], 0, busyMask, numCoresBusyPrimary, min, max, avg,
+                fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,%d,%d,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d\n", count, time,
+                    idleCoreCount, numHvmCores, hvmMasks[numHvmCores], 0, numCoresBusyPrimary, min, max, avg,
                     stddev, med, pred, numPrimaryCores, max, overpredicted, safeguard, feedback_max);
               }
             }
@@ -711,9 +718,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               if (output_fp)
               {
                 double time = timer.ElapsedUS() / 1000000.0;
-                fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,0x%x,%d,%d,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d\n", count, time,
-                    idleCoreCount, numHvmCores, hvmMasks[numHvmCores], 0, busyMask, numCoresBusyPrimary, min, max, avg,
-                    stddev, med, pred, numPrimaryCores, max, overpredicted, safeguard, feedback_max);
+                fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,%d,%d,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d\n", count, time,
+                    idleCoreCount, numHvmCores, hvmMasks[numHvmCores], 0, numCoresBusyPrimary, min, max, avg, stddev,
+                    med, pred, numPrimaryCores, max, overpredicted, safeguard, feedback_max);
               }
             }
           }
@@ -751,9 +758,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               if (output_fp)
               {
                 double time = timer.ElapsedUS() / 1000000.0;
-                fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,0x%x,%d,%d,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d\n", count, time,
-                    idleCoreCount, numHvmCores, hvmMasks[numHvmCores], 0, busyMask, numCoresBusyPrimary, min, max, avg,
-                    stddev, med, pred, numPrimaryCores, max, overpredicted, safeguard, feedback_max);
+                fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,%d,%d,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d\n", count, time,
+                    idleCoreCount, numHvmCores, hvmMasks[numHvmCores], 0, numCoresBusyPrimary, min, max, avg, stddev,
+                    med, pred, numPrimaryCores, max, overpredicted, safeguard, feedback_max);
               }
             }
             else
@@ -761,9 +768,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               if (output_fp)
               {
                 double time = timer.ElapsedUS() / 1000000.0;
-                fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,0x%x,%d,%d,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d\n", count, time,
-                    idleCoreCount, numHvmCores, hvmMasks[numHvmCores], 0, busyMask, numCoresBusyPrimary, min, max, avg,
-                    stddev, med, pred, numPrimaryCores, max, overpredicted, safeguard, feedback_max);
+                fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,%d,%d,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d\n", count, time,
+                    idleCoreCount, numHvmCores, hvmMasks[numHvmCores], 0, numCoresBusyPrimary, min, max, avg, stddev,
+                    med, pred, numPrimaryCores, max, overpredicted, safeguard, feedback_max);
               }
             }
 
@@ -963,9 +970,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         if (output_fp)
         {
           double time = timer.ElapsedUS() / 1000000.0;
-          fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,0x%x,%d,%d,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d\n", count, time,
-              idleCoreCount, numHvmCores, hvmMasks[numHvmCores], 0, busyMask, numCoresBusyPrimary, min, max, avg,
-              stddev, med, pred, numPrimaryCores, max, overpredicted, safeguard, feedback_max);
+          fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,%d,%d,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d\n", count, time, idleCoreCount,
+              numHvmCores, hvmMasks[numHvmCores], 0, numCoresBusyPrimary, min, max, avg, stddev, med, pred,
+              numPrimaryCores, max, overpredicted, safeguard, feedback_max);
         }
       }
       else
@@ -982,9 +989,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         if (output_fp)
         {
           double time = timer.ElapsedUS() / 1000000.0;
-          fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,0x%x,%d,%d,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d\n", count, time,
-              idleCoreCount, numHvmCores, hvmMasks[numHvmCores], 0, busyMask, numCoresBusyPrimary, min, max, avg,
-              stddev, med, pred, numPrimaryCores, max, overpredicted, safeguard, feedback_max);
+          fprintf(output_fp, "%d,%.3lf,%d,%d,0x%x,%d,%d,%d,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d\n", count, time, idleCoreCount,
+              numHvmCores, hvmMasks[numHvmCores], 0, numCoresBusyPrimary, min, max, avg, stddev, med, pred,
+              numPrimaryCores, max, overpredicted, safeguard, feedback_max);
         }
       }
 
