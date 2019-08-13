@@ -854,8 +854,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           if (DEBUG)
             std::cout << "pred = " << pred << endl;
           VW::finish_example(*vw, *ex_pred);
-          // numPrimaryCores = std::min(std::max(pred, max + 1), totalPrimaryCores);
-          numPrimaryCores = std::min(pred, totalPrimaryCores);
+          numPrimaryCores = std::min(std::max(pred, max + 1), totalPrimaryCores); //keep at least 1 core busy
+          //numPrimaryCores = std::min(pred, totalPrimaryCores);
 
           if (TIMING)
           {
@@ -908,6 +908,22 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
       else
       {
+        if (numHvmCores == prevHvmCores && mode == IPI && timer.ElapsedMS() > prevIpiTimestampMS + ipiTimeoutMS)
+        {
+          HVMAgent_ResetStrings();
+          ASSERT(SUCCEEDED(HVMAgent_CreateCpuGroupFromBack(&hvmGuid, numHvmCores)));
+          ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroup(hvmGuid)));
+
+          char buf[128];
+          sprintf_guid(hvmGuid, buf);
+          printf("%.4lf: WARNING: Potential IPI failure; created new CpuGroup with %d cores: %s\n",
+              timer.ElapsedSeconds(), numHvmCores, buf);
+
+          prevIpiTimestampMS = timer.ElapsedMS();
+          ipiFailCount++;
+          //sleep_us += 10000;  
+          HVMAgent_SpinUS(10000); // 10ms for CPUGROUP_TIMEOUT;
+        }
         if (output_fp)
         {
           double time = timer.ElapsedUS() / 1000000.0;
