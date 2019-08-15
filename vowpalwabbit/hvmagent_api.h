@@ -52,5 +52,7 @@ extern "C" HRESULT HVMAgent_GetVMHandle(const std::wstring vmname, HCS_SYSTEM *h
 extern "C" HRESULT HVMAgent_PinPrimary(const std::wstring vmname, UINT32 numCores, GUID *guid);
 
 extern "C" HRESULT HVMAgent_AssignCpuGroup(GUID guid);
-extern "C" HRESULT HVMAgent_AssignCPUGroupToVM(HCS_SYSTEM vmHandle, GUID cpuGroup);
+extern "C" HRESULT HVMAgent_AssignCpuGroupToVM(HCS_SYSTEM vmHandle, GUID cpuGroup);
 extern "C" HRESULT HVMAgent_SetCpuGroupCap(__in const GUID &cpuGroupId, __in const UINT64 &cpuGroupCap);
+
+extern "C" HRESULT PrintCpuGroupInfo(GUID guid);
