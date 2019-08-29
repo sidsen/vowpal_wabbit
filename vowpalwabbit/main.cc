@@ -333,6 +333,21 @@ void writeLogs()
 }
 
 
+vector<wstring> splitString(const std::wstring &str, WCHAR delim)
+{
+  vector<wstring> result;
+  wstring temp;
+  wstringstream wss(str);
+
+  while (std::getline(wss, temp, delim)) {
+    if (!temp.empty()) {
+      result.push_back(temp);
+    }
+  }
+
+  return result;
+}
+
 
 struct VMInfo
 {
@@ -347,10 +362,16 @@ struct VMInfo
 
     setupCpuGroups();
 
-    ASSERT(SUCCEEDED(HVMAgent_GetVMHandle(_vmName, &handle)));
-    cout << "_numcore:" << _numCores << endl;
-    ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, GUID_NULL)));
-    ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, groups[curCores])));
+    vector<wstring> vmNames = splitString(_vmName, L',');
+
+    for (const wstring &vmName : vmNames) {
+      wcout << L"Initializing handle for: " << vmName << L"with _numcore:" << _numCores << endl;
+      HCS_SYSTEM handle;
+      ASSERT(SUCCEEDED(HVMAgent_GetVMHandle(vmName, &handle)));
+      handles.push_back(handle);
+      ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, GUID_NULL)));
+      ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, groups[curCores])));
+    }
   }
 
   void setupCpuGroups()
@@ -379,8 +400,10 @@ struct VMInfo
   void updateCores(INT32 numCores)
   {
     curCores = numCores;
-    ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, GUID_NULL)));
-    ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, groups[curCores])));
+    for (const HCS_SYSTEM &handle : handles) {
+      ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, GUID_NULL)));
+      ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, groups[curCores])));
+    }
   }
 
   INT32 idleCores(UINT64 systemBusyMask)
@@ -397,12 +420,11 @@ struct VMInfo
   INT32 minCores;
   INT32 maxCores;
   INT32 curCores;
-  HCS_SYSTEM handle;
+  vector<HCS_SYSTEM> handles;
   GUID groups[MAX_CORES];
   UINT64 masks[MAX_CORES];
   BOOLEAN primary;
 };
-
 
 VMInfo primary;
 VMInfo hvm;
