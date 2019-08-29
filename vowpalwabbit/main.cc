@@ -575,13 +575,13 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
       while (true)
       {
+        HVMAgent_SpinUS(read_cpu_sleep_us);
+
         systemBusyMask = HVMAgent_BusyMaskRaw();
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
         primaryBusyCores = primary.busyCores(systemBusyMask);
         primaryCores = primary.curCores;
-
-        HVMAgent_SpinUS(read_cpu_sleep_us);
 
         if (primaryBusyCores > max)
           max = primaryBusyCores;
@@ -604,6 +604,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
       while (true)
       {
+        HVMAgent_SpinUS(read_cpu_sleep_us);
+
         systemBusyMask = HVMAgent_BusyMaskRaw();
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
@@ -663,6 +665,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       /* collect cpu data for vw learning window */
       while (true)
       {
+        HVMAgent_SpinUS(read_cpu_sleep_us);
+
         if (TIMING)
           start = high_resolution_clock::now();
 
