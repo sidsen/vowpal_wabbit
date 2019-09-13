@@ -85,6 +85,8 @@ const WCHAR ARG_FEEDBACK[] = L"--feedback";
 const WCHAR ARG_FEEDBACK_MS[] = L"--feedback_ms";
 const WCHAR ARG_SLEEP_MS[] = L"--sleep_ms";
 const WCHAR ARG_MODE[] = L"--mode";
+const WCHAR ARG_MODE_IPI[] = L"IPI";
+const WCHAR ARG_MODE_CPUGROUPS[] = L"CpuGroups";
 const WCHAR ARG_PRIMARY_SIZE[] = L"--primary_size";
 const WCHAR ARG_DROP_BAD_FEATURES[] = L"--drop_bad_features";
 const WCHAR ARG_READ_CPU_SLEEP_US[] = L"--read_cpu_sleep_us";
@@ -205,14 +207,14 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_MODE, ARRAY_SIZE(ARG_MODE)))
     {
-      MODE = argv[1];
-      wcout << "MODE: " << MODE << std::endl;
-      if (MODE == L"IPI")
-        mode = IPI;
-      else if (MODE == L"CPUGROUPS")
+      if (0 == ::_wcsnicmp(argv[1], ARG_MODE_CPUGROUPS, ARRAY_SIZE(ARG_MODE_CPUGROUPS)))
+      {
         mode = CPUGROUPS;
-      else if (MODE == L"NEWIPI")
-        mode = NEWIPI;
+      }
+      else if (0 == ::_wcsnicmp(argv[1], ARG_MODE_IPI, ARRAY_SIZE(ARG_MODE_IPI)))
+      {
+        mode = IPI;
+      }
       else
       {
         cout << "Invalid mode" << endl;
@@ -365,8 +367,21 @@ struct VMInfo
       HCS_SYSTEM handle;
       ASSERT(SUCCEEDED(HVMAgent_GetVMHandle(vmName, &handle)));
       handles.push_back(handle);
+
       ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, GUID_NULL)));
-      ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, groups[curCores])));
+
+      if (mode == CPUGROUPS)
+      {
+        ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, groups[curCores])));
+      }
+      else if (mode == IPI)
+      {
+        ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, ipiGroup)));
+      }
+      else
+      {
+        ASSERT(FALSE);
+      }
     }
   }
 
@@ -385,6 +400,7 @@ struct VMInfo
       {
         masks[i] = HVMAgent_GenerateCoreAffinityFromBack(i);
       }
+      wcout << L"Mask " << i << L": " << masks[i] << endl;
     }
 
     if (mode == CPUGROUPS)
@@ -411,17 +427,17 @@ struct VMInfo
   void updateCores(INT32 numCores)
   {
     curCores = numCores;
-    for (const HCS_SYSTEM& handle : handles)
+    if (mode == CPUGROUPS)
     {
-      if (mode == CPUGROUPS)
+      for (const HCS_SYSTEM& handle : handles)
       {
         ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, GUID_NULL)));
         ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, groups[curCores])));
       }
-      else if (mode == IPI)
-      {
-        ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCores(ipiGroup, numCores)));
-      }
+    }
+    else if (mode == IPI)
+    {
+      ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCoresUsingMask(ipiGroup, masks[numCores])));
     }
   }
 
@@ -459,13 +475,16 @@ void updateCores(UINT32 primaryCores)  //, UINT32 hvmCores)
   primary.updateCores(primaryCores);
 }
 
-INT32 idleCoreCount(UINT64 systemBusyMask) { return primary.idleCores(systemBusyMask) + hvm.idleCores(systemBusyMask); }
-
 void init()
 {
   // initialize hvmagent
   ASSERT(SUCCEEDED(HVMAgent_Init(&cpuInfo)));
   std::cout << "HVMAgent initialized" << endl;
+
+  if (cpuInfo.IsHyperThreaded)
+  {
+    PRIMARY_SIZE /= 2;
+  }
 
   primary.init(primaryNames, PRIMARY_SIZE, TRUE);
   hvm.init(secondaryName, cpuInfo.NonMinRootCores - PRIMARY_SIZE, FALSE);
