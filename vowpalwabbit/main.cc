@@ -43,8 +43,9 @@ license as described in the file LICENSE.
 
 using namespace std::chrono;
 using namespace std;
+using namespace VW::config;
 
-#define MAX_CORES 64
+#define MAX_CORES 64 //hardcoded for now (64-bit core busy mask)
 
 #define ASSERT(exp)                                          \
   do                                                         \
@@ -57,9 +58,6 @@ using namespace std;
     }                                                        \
   } while (0);
 
-using namespace std;
-using namespace VW::config;
-
 enum Mode
 {
   INVALID,
@@ -67,6 +65,7 @@ enum Mode
   NEWIPI,
   CPUGROUPS
 };
+
 UINT32 bitcount(UINT64 mask)
 {
   UINT32 count = 0;
@@ -83,7 +82,6 @@ UINT32 bitcount(UINT64 mask)
 #define MIN_HVM_CORES 1   // 6
 
 /* process args */
-
 const WCHAR ARG_CSV[] = L"--csv";
 const WCHAR ARG_DURATION[] = L"--duration_sec";
 const WCHAR ARG_BUFFER[] = L"--buffer";
@@ -129,7 +127,7 @@ int dropBadFeatures = 0;
 int read_cpu_sleep_us = 0;
 
 Mode mode;
-std::wstring primaryNames = L"LatSensitive-0,LatSensitive-1";
+std::wstring primaryNames = L"LatSensitive"; // L"LatSensitive-0,LatSensitive-1";
 std::wstring secondaryName = L"CPUBully";
 CpuInfo cpuInfo;
 
@@ -147,64 +145,79 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     if (0 == ::_wcsnicmp(argv[0], ARG_CSV, ARRAY_SIZE(ARG_CSV)))
     {
       output_csv = argv[1];
+      wcout << "output_csv: " << output_csv << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_PRIMARY_NAMES, ARRAY_SIZE(ARG_PRIMARY_NAMES)))
     {
       primaryNames = argv[1];
+      wcout << "primaryNames: " << primaryNames << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_DURATION, ARRAY_SIZE(ARG_DURATION)))
     {
       RUN_DURATION_SEC = _wtoi(argv[1]);
+      wcout << "RUN_DURATION_SEC: " << RUN_DURATION_SEC << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_BUFFER, ARRAY_SIZE(ARG_BUFFER)))
     {
       bufferSize = _wtoi(argv[1]);
       FIXED_BUFFER_MODE = 1;
+      wcout << "bufferSize: " << bufferSize << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_DELAY_MS, ARRAY_SIZE(ARG_DELAY_MS)))
     {
       DELAY_MS = _wtoi(argv[1]);
+      wcout << "DELAY_MS: " << DELAY_MS << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_MODE, ARRAY_SIZE(ARG_LEARNING_MODE)))
     {
       LEARNING_MODE = _wtoi(argv[1]);
+      wcout << "LEARNING_MODE: " << LEARNING_MODE << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_MS, ARRAY_SIZE(ARG_LEARNING_MS)))
     {
       LEARNING_MS = _wtoi(argv[1]);
+      wcout << "LEARNING_MS: " << LEARNING_MS << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_TIMING, ARRAY_SIZE(ARG_TIMING)))
     {
       TIMING = _wtoi(argv[1]);
+      wcout << "TIMING: " << TIMING << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_DEBUG, ARRAY_SIZE(ARG_DEBUG)))
     {
       DEBUG = _wtoi(argv[1]);
+      wcout << "DEBUG: " << DEBUG << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_NO_HARVESTING, ARRAY_SIZE(ARG_NO_HARVESTING)))
     {
       NO_HARVESTING = _wtoi(argv[1]);
+      wcout << "NO_HARVESTING: " << NO_HARVESTING << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_PRIMARY_ALONE, ARRAY_SIZE(ARG_PRIMARY_ALONE)))
     {
       PRIMARY_ALONE = _wtoi(argv[1]);
+      wcout << "PRIMARY_ALONE: " << PRIMARY_ALONE << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_FEEDBACK, ARRAY_SIZE(ARG_FEEDBACK)))
     {
       FEEDBACK = _wtoi(argv[1]);
+      wcout << "FEEDBACK: " << FEEDBACK << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_FEEDBACK_MS, ARRAY_SIZE(ARG_FEEDBACK_MS)))
     {
       FEEDBACK_MS = _wtoi(argv[1]);
+      wcout << "FEEDBACK_MS: " << FEEDBACK_MS << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_SLEEP_MS, ARRAY_SIZE(ARG_SLEEP_MS)))
     {
       SLEEP_MS = _wtoi(argv[1]);
       SLEEP_US = SLEEP_MS * 1000;
+      wcout << "SLEEP_MS: " << SLEEP_MS << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_MODE, ARRAY_SIZE(ARG_MODE)))
     {
       MODE = argv[1];
+      wcout << "MODE: " << MODE << std::endl;
       if (MODE == L"IPI")
         mode = IPI;
       else if (MODE == L"CPUGROUPS")
@@ -220,14 +233,17 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     else if (0 == ::_wcsnicmp(argv[0], ARG_PRIMARY_SIZE, ARRAY_SIZE(ARG_PRIMARY_SIZE)))
     {
       PRIMARY_SIZE = _wtoi(argv[1]);
+      wcout << "PRIMARY_SIZE: " << PRIMARY_SIZE << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_DROP_BAD_FEATURES, ARRAY_SIZE(ARG_DROP_BAD_FEATURES)))
     {
       dropBadFeatures = _wtoi(argv[1]);
+      wcout << "dropBadFeatures: " << dropBadFeatures << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_READ_CPU_SLEEP_US, ARRAY_SIZE(ARG_READ_CPU_SLEEP_US)))
     {
       read_cpu_sleep_us = _wtoi(argv[1]);
+      wcout << "read_cpu_sleep_us: " << read_cpu_sleep_us << std::endl;
     }
     else
     {
@@ -244,15 +260,9 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   if (LEARNING_MODE != 0 || NO_HARVESTING != 0)
     FIXED_BUFFER_MODE = 0;
 
-  wcout << L"Parameters:" << L" run_duration_sec" << RUN_DURATION_SEC << L" sleep_ms:" << SLEEP_MS << L" buffer size:"
-        << bufferSize << L" fixed buffer:" << FIXED_BUFFER_MODE << L" delay_ms:" << DELAY_MS << L" csv:" << output_csv
-        << L" learning_mode:" << LEARNING_MODE << L" learning_ms:" << LEARNING_MS << L" debug:" << DEBUG << L" timing:"
-        << TIMING << L" no_harvesting: " << NO_HARVESTING << L" primary_alone:" << PRIMARY_ALONE << L" feedback:"
-        << FEEDBACK << L" feedback_ms:" << FEEDBACK_MS << L" mode:" << MODE << L" PRIMARY_SIZE:" << PRIMARY_SIZE
-        << L" dropBadFeatures:" << dropBadFeatures << L" read_cpu_sleep_us:" << read_cpu_sleep_us << std::endl;
-
-  wcout << "MAX_HVM_CORES " << MAX_HVM_CORES << std::endl;
-  wcout << "MIN_HVM_CORES" << MIN_HVM_CORES << std::endl;
+  wcout << "FIXED_BUFFER_MODE: " << FIXED_BUFFER_MODE << std::endl;
+  wcout << "MAX_HVM_CORES: " << MAX_HVM_CORES << std::endl;
+  wcout << "MIN_HVM_CORES: " << MIN_HVM_CORES << std::endl;
 }
 
 /* logging */
