@@ -66,17 +66,6 @@ enum Mode
   CPUGROUPS
 };
 
-UINT32 bitcount(UINT64 mask)
-{
-  UINT32 count = 0;
-  while (mask)
-  {
-    mask &= (mask - 1);
-    count++;
-  }
-  return count;
-}
-
 //#define TOTAL_PRIMARY_CORE 6
 #define MAX_HVM_CORES 24  // 12
 #define MIN_HVM_CORES 1   // 6
@@ -366,8 +355,6 @@ struct VMInfo
     curCores = _numCores;
     primary = _primary;
 
-    ASSERT(mode == CPUGROUPS);
-
     setupCpuGroups();
 
     vector<wstring> vmNames = splitString(_vmName, L',');
@@ -385,18 +372,25 @@ struct VMInfo
 
   void setupCpuGroups()
   {
+    UINT32 minCores = 1;
+    UINT32 maxCores = cpuInfo.NonMinRootCores;
+
+    for (UINT32 i = minCores; i <= maxCores; i++)
+    {
+      if (primary)
+      {
+        masks[i] = HVMAgent_GenerateCoreAffinityFromFront(i);
+      }
+      else
+      {
+        masks[i] = HVMAgent_GenerateCoreAffinityFromBack(i);
+      }
+    }
+
     if (mode == CPUGROUPS)
     {
-      for (UINT32 i = 1; i <= cpuInfo.NonMinRootCores; i++)
+      for (UINT32 i = minCores; i <= maxCores; i++)
       {
-        if (primary)
-        {
-          masks[i] = HVMAgent_GenerateCoreAffinityFromFront(i);
-        }
-        else
-        {
-          masks[i] = HVMAgent_GenerateCoreAffinityFromBack(i);
-        }
         ASSERT(SUCCEEDED(HVMAgent_CreateCpuGroup(&groups[i], masks[i])));
         if (verbose)
         {
@@ -404,9 +398,13 @@ struct VMInfo
         }
       }
     }
-    else  // if (mode == IPI || mode == NEWIPI)
+    else if (mode == IPI)
     {
-      ASSERT(false);
+      ASSERT(SUCCEEDED(HVMAgent_CreateCpuGroup(&ipiGroup, masks[curCores])));
+      if (verbose)
+      {
+        PrintCpuGroupInfo(ipiGroup);
+      }
     }
   }
 
@@ -415,19 +413,34 @@ struct VMInfo
     curCores = numCores;
     for (const HCS_SYSTEM& handle : handles)
     {
-      ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, GUID_NULL)));
-      ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, groups[curCores])));
+      if (mode == CPUGROUPS)
+      {
+        ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, GUID_NULL)));
+        ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, groups[curCores])));
+      }
+      else if (mode == IPI)
+      {
+        ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCores(ipiGroup, numCores)));
+      }
     }
   }
 
-  INT32 idleCores(UINT64 systemBusyMask) { return curCores - busyCores(systemBusyMask); }
+  INT32 idleCores(UINT64 systemBusyMask)
+  {
+    return curCores - busyCores(systemBusyMask);
+  }
 
-  INT32 busyCores(UINT64 systemBusyMask) { return bitcount(systemBusyMask & masks[curCores]); }
+  INT32 busyCores(UINT64 systemBusyMask)
+  {
+    return HVMAgent_CoreCount(systemBusyMask & masks[curCores]);
+  }
 
   INT32 minCores;
   INT32 maxCores;
   INT32 curCores;
   vector<HCS_SYSTEM> handles;
+
+  GUID ipiGroup;
   GUID groups[MAX_CORES];
   UINT64 masks[MAX_CORES];
   BOOLEAN primary;
@@ -442,7 +455,6 @@ VMInfo hvm;
 
 void updateCores(UINT32 primaryCores)  //, UINT32 hvmCores)
 {
-  ASSERT(mode == CPUGROUPS);
   hvm.updateCores(cpuInfo.NonMinRootCores - primaryCores);
   primary.updateCores(primaryCores);
 }
@@ -601,7 +613,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         HVMAgent_SpinUS(read_cpu_sleep_us);
 
-        systemBusyMask = HVMAgent_BusyMaskRaw();
+        systemBusyMask = HVMAgent_BusyMaskCores();
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
         primaryBusyCores = primary.busyCores(systemBusyMask);
@@ -630,7 +642,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         HVMAgent_SpinUS(read_cpu_sleep_us);
 
-        systemBusyMask = HVMAgent_BusyMaskRaw();
+        systemBusyMask = HVMAgent_BusyMaskCores();
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
         primaryBusyCores = primary.busyCores(systemBusyMask);
@@ -692,7 +704,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         if (TIMING)
           start = high_resolution_clock::now();
 
-        systemBusyMask = HVMAgent_BusyMaskRaw();
+        systemBusyMask = HVMAgent_BusyMaskCores();
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
         primaryBusyCores = primary.busyCores(systemBusyMask);
