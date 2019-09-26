@@ -528,7 +528,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           "f_avg,f_stddev,f_med,pred_peak,upper_bound,cpu_max,overpredicted,safeguard,feedback_max,
   potential_ipi_failure\n");
 
-    fflush(output_fp);
+    fflush(output_fp);d
   }
   */
 
@@ -585,6 +585,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   int prevSafeguard = 0;
   int updateModel = 0;
 
+  int buffer_empty_consecutive_count = 0;
   // initialize vw
   auto vw = VW::initialize("--csoaa " + to_string(primary.maxCores) + " --power_t 0 -l 0.1");
   std::cout << "vw initialized with " << primary.maxCores << " classes." << endl;
@@ -879,7 +880,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         start = high_resolution_clock::now();
 
-        if (LEARNING_MODE == 1 || LEARNING_MODE == 2)
+        if (LEARNING_MODE == 1 || LEARNING_MODE == 2 || LEARNING_MODE == 5)
         {  // mode 1&2 need to decide overprediction here
           if (max < primary.curCores || primary.curCores == primary.maxCores)
             overpredicted = 1;
@@ -887,11 +888,40 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             overpredicted = 0;
         }
 
+        if (LEARNING_MODE = 6)
+        {
+          if (max < primary.curCores || primary.curCores == primary.maxCores)
+          {
+            overpredicted = 1;
+            buffer_empty_consecutive_count = 0;
+          }
+          else
+          {
+            overpredicted = 0;
+            buffer_empty_consecutive_count += 1; 
+          }  
+        }
+
         if (LEARNING_MODE == 1)
         {
           // mode 1 always relies on predictions
           invoke_learning = 1;
           safeguard = 0;
+        }
+        else if (LEARNING_MODE == 6)
+        {
+          // mode 6 triggers safeguard/exploration if buffer empty for 3 past consecutive intervals  
+          if (buffer_empty_consecutive_count == 3)
+          {
+            invoke_learning = 0;
+            safeguard = 1;
+            buffer_empty_consecutive_count = 0;    
+          }
+          else 
+          {
+            invoke_learning = 1;
+            safeguard = 0;
+          }  
         }
         else
         {
@@ -1001,6 +1031,12 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           if (DEBUG)
             std::cout << "UNDER-PREDICTION" << endl;
           newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
+          
+          if (LEARNING_MODE == 5)
+          {
+            // mode 5 uses less aggressive safeguard 
+            newPrimaryCores = std::min(primary.maxCores, primary.curCores + 1);
+          }
           // safeguard = 1;
         }
       }
