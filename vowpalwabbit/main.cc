@@ -880,7 +880,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         start = high_resolution_clock::now();
 
-        if (LEARNING_MODE == 1 || LEARNING_MODE == 2 || LEARNING_MODE == 5)
+        if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5)
         {  // mode 1&2 need to decide overprediction here
           if (max < primary.curCores || primary.curCores == primary.maxCores)
             overpredicted = 1;
@@ -902,7 +902,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           }  
         }
 
-        if (LEARNING_MODE == 1)
+        if (LEARNING_MODE == 1 || LEARNING_MODE == 7)
         {
           // mode 1 always relies on predictions
           invoke_learning = 1;
@@ -989,6 +989,14 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           }
 
           /* construct features for prediction */
+          if (LEARNING_MODE == 7)
+          {
+            min = 1;
+            max = 1;
+            avg = 1;
+            stddev = 1;
+            med = 1;
+          }
           vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
               " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
           if (DEBUG)
