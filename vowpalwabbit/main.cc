@@ -950,6 +950,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         if (DEBUG)
           cout << "invoke_learning: " << invoke_learning << " safeguard:" << safeguard << endl;
 
+        invoke_learning = 1;
         if (invoke_learning)
         {  // use model prediction for next window only if overpredicted from the previous window
           // if (dropBadFeatures && prevSafeguard)
@@ -1021,7 +1022,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
           if (LEARNING_MODE == 8)
           {
-            newPrimaryCores = std::min(primary.maxCores, pred+1)
+            newPrimaryCores = std::min(primary.maxCores, pred+1);
           }
 
           if (TIMING)
@@ -1038,7 +1039,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           // cout << "numPrimaryCores: " << numPrimaryCoresPrev << " --> " << numPrimaryCores << "  hvm.curCores" <<
           // hvm.curCoresPrev << " --> " << hvm.curCores << endl;
         }
-        else
+        
+        if (safeguard)
         {
           // under-prediction
           pred = 0;
@@ -1055,7 +1057,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           if (LEARNING_MODE == 8)
           {
             // mode 8 uses (previous allocation + 1) as safeguard
-            newPrimaryCores = std::min(primary.maxCores, primary.curCores + 1)
+            newPrimaryCores = std::min(primary.maxCores, primary.curCores + 1);
           }
           // safeguard = 1;
         }
