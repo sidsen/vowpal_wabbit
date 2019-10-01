@@ -600,6 +600,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   int use_curr_busy = 1;
 
   std::cout << "************************" << endl;
+  std::cout << "always update learning model (even for under-predictions)" << endl;
   if (use_curr_busy)
     std::cout << "use current busy" << endl;
   else
