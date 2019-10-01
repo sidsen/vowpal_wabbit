@@ -854,6 +854,15 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       else
         med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2.0;
 
+      if (LEARNING_MODE == 7)
+      {
+        min = 1;
+        max = 1;
+        avg = 1;
+        stddev = 1;
+        med = 1;
+      }
+
       if (TIMING)
       {
         stop = high_resolution_clock::now();
@@ -880,7 +889,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         start = high_resolution_clock::now();
 
-        if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5)
+        if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 || LEARNING_MODE == 8)
         {  // mode 1&2 need to decide overprediction here
           if (max < primary.curCores || primary.curCores == primary.maxCores)
             overpredicted = 1;
@@ -925,7 +934,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
         else
         {
-          // mode 2&3&4 can trigger safeguard
+          // mode 2&3&4&5&8 can trigger safeguard
           if (overpredicted)
           {
             invoke_learning = 1;
@@ -989,14 +998,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           }
 
           /* construct features for prediction */
-          if (LEARNING_MODE == 7)
-          {
-            min = 1;
-            max = 1;
-            avg = 1;
-            stddev = 1;
-            med = 1;
-          }
           vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
               " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
           if (DEBUG)
@@ -1017,6 +1018,11 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           else
             newPrimaryCores = std::min(std::max(pred, max + 1),
                 primary.maxCores);  // keep at least 1 core in addition to max from the past window
+
+          if (LEARNING_MODE == 8)
+          {
+            newPrimaryCores = std::min(primary.maxCores, pred+1)
+          }
 
           if (TIMING)
           {
@@ -1044,6 +1050,12 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           {
             // mode 5 uses less aggressive safeguard 
             newPrimaryCores = std::min(primary.maxCores, primary.curCores + 1);
+          }
+          
+          if (LEARNING_MODE == 8)
+          {
+            // mode 8 uses (previous allocation + 1) as safeguard
+            newPrimaryCores = std::min(primary.maxCores, primary.curCores + 1)
           }
           // safeguard = 1;
         }
