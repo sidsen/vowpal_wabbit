@@ -617,7 +617,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   timer.Start();
   UINT64 systemBusyMask;
   INT32 primaryBusyCores, primaryCores, hvmBusyCores, hvmCores;
-  INT32 newPrimaryCores;
+  INT32 newPrimaryCores = primary.maxCores;
 
   while (timer.ElapsedSeconds() < RUN_DURATION_SEC)
   {
@@ -882,6 +882,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           std::cout << "Using vw learning" << endl;
         first_window = 0;
 
+        newPrimaryCores = primary.maxCores;
         /* construct features for model update */
         vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
             " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
@@ -1100,7 +1101,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   FILE* timing_fp = nullptr;
   if (TIMING)
   {
-    // writing files to  D:\HarvestVM\abs-registry\Benchmarks\CPUBully\
+    // writing files to  D:\HarvestVM\abs-registry\Benchmarks\CPUBully
     cout << "writing timing logs" << endl;
     ofstream myfile;
     // myfile.open("D:\Results\timing\vw_timing_log.csv");
