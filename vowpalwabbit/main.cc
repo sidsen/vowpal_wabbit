@@ -272,6 +272,7 @@ struct Record
   // int primaryBusy;
   int min;
   int max;
+  int cpu_max;
   double avg;
   double stddev;
   int64_t med;
@@ -855,6 +856,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       else
         med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2;
 
+      cpu_max = max;
       if (LEARNING_MODE == 7)
       {
         min = 1;
@@ -1092,7 +1094,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
 
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-          primaryCores, min, max, avg, stddev, med, pred, newPrimaryCores, max, overpredicted, safeguard, feedback_max,
+          primaryCores, min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max, overpredicted, safeguard, feedback_max,
           updateModel};
       ASSERT(numLogEntries < MAX_RECORDS);
 
