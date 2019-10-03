@@ -891,7 +891,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         start = high_resolution_clock::now();
 
-        if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 || LEARNING_MODE == 8)
+        if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 || LEARNING_MODE == 8 || LEARNING_MODE == 9)
         {  // mode 1&2 need to decide overprediction here
           if (max < primary.curCores || primary.curCores == primary.maxCores)
             overpredicted = 1;
@@ -936,7 +936,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
         else
         {
-          // mode 2&3&4&5&8 can trigger safeguard
+          // mode 2&3&4&5&8&9 can trigger safeguard
           if (overpredicted)
           {
             invoke_learning = 1;
@@ -967,12 +967,20 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             // and previous window buffer empty)
             /* create cost label */
             vwLabel.clear();
+            
+            correct_class = max;
+
+            if (LEARNING_MODE == 9)
+            { // mode 9 tries new cost function
+              correct_class = max + 1;
+            }
+
             for (int k = 1; k < primary.maxCores + 1; k++)
             {
-              if (k < max)
-                cost = max - k + primary.maxCores;  // underprediction (worse --> higher cost)
+              if (k < correct_class)
+                cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
               else
-                cost = k - max;  // prefect- & over-prediction
+                cost = k - correct_class;  // prefect- & over-prediction
               vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
             }
 
