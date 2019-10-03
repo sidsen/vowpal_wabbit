@@ -1070,7 +1070,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         // cout << "call update: invoke_learning: " << invoke_learning << " safeguard:" << safeguard << "
         // numPrimaryCores: " << numPrimaryCores << "  hvm.curCores" << hvm.curCores<< endl;
-        cout << "<debug> numPrimaryCores = " << numPrimaryCores;
+        cout << "<debug> numPrimaryCores = " << numPrimaryCores << endl;
         updateCores(newPrimaryCores);
         // printf("called update: primary.curMask=0x%x\n", primary.curMask);
         // cout << "called update: primary.curMask: " << primary.curMask << " numPrimaryCores: " << numPrimaryCores << "
