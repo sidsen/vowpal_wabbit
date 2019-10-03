@@ -272,9 +272,9 @@ struct Record
   // int primaryBusy;
   int min;
   int max;
-  float avg;
-  float stddev;
-  int med;
+  double avg;
+  double stddev;
+  int64_t med;
   int pred;
   int newPrimaryCores;
   int cpu_max;
@@ -322,7 +322,7 @@ void writeLogs()
     for (size_t i = 0; i < numLogEntries; i++)
     {
       Record r = records[i];
-      fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%d,%d,%f,%f,%d,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount, r.time, r.hvmBusy,
+      fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%d,%d,%lf,%lf,%lld,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount, r.time, r.hvmBusy,
           r.hvmCores, r.primaryBusy, r.primaryCores, r.min, r.max, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores,
           r.cpu_max, r.overpredicted, r.safeguard, r.feedback_max, r.updateModel);
     }
@@ -552,15 +552,15 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   // VW learning agent
   /************************/
   // initilize vw features
-  int size;                // 10 * 1000 / 50 = 200 readings per 10ms
-  vector<int> cpu_busy_a;  // num of busy cpu cores of primary vm --> reading every <1us
-  vector<int> cpu_busy_b;
-  vector<int> time_b;
-  vector<int> feature_compute_us;
-  vector<int> model_update_us;
-  vector<int> model_inference_us;
-  vector<int> read_primary_cpu_us;
-  vector<int> log_primary_cpu_us;
+  size_t size;                // 10 * 1000 / 50 = 200 readings per 10ms
+  vector<int64_t> cpu_busy_a;  // num of busy cpu cores of primary vm --> reading every <1us
+  vector<int64_t> cpu_busy_b;
+  vector<int64_t> time_b;
+  vector<int64_t> feature_compute_us;
+  vector<int64_t> model_update_us;
+  vector<int64_t> model_inference_us;
+  vector<int64_t> read_primary_cpu_us;
+  vector<int64_t> log_primary_cpu_us;
 
   int invoke_learning = 0;
   int first_window = 1;
@@ -572,9 +572,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   int max = 0;
   int feedback_max = 0;
   int min = primary.maxCores;
-  int med = 0;
-  float stddev = 0;
-  float avg = 0;
+  int64_t med = 0;
+  double stddev = 0;
+  double avg = 0;
   string feature;
 
   int pred = 0;
@@ -735,7 +735,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         {
           stop = high_resolution_clock::now();
           duration = duration_cast<microseconds>(stop - start);
-          read_primary_cpu_us.push_back(duration.count());
+          read_primary_cpu_us.push_back((int)duration.count());
           start = high_resolution_clock::now();
         }
 
@@ -824,7 +824,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         {
           stop = high_resolution_clock::now();
           duration = duration_cast<microseconds>(stop - start);
-          log_primary_cpu_us.push_back(duration.count());
+          log_primary_cpu_us.push_back((int)duration.count());
           start = high_resolution_clock::now();
         }
 
@@ -841,7 +841,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       size = cpu_busy_a.size();
       avg = 1.0 * sum / size;
       // compute stddev
-      float tmp_sum = 0;
+      double tmp_sum = 0;
       for (int i = 0; i < size; i++)
       {
         tmp_sum += (cpu_busy_a[i] - avg) * (cpu_busy_a[i] - avg);
@@ -853,7 +853,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       if (size % 2 != 0)
         med = cpu_busy_a[size / 2];
       else
-        med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2.0;
+        med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2;
 
       if (LEARNING_MODE == 7)
       {
@@ -1009,7 +1009,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
           /* get prediction --> # cores to primary VM */
           vw->predict(*ex_pred);
-          pred = VW::get_cost_sensitive_prediction(ex_pred);
+          pred = (int) VW::get_cost_sensitive_prediction(ex_pred);
           if (DEBUG)
             std::cout << "pred = " << pred << endl;
           VW::finish_example(*vw, *ex_pred);
