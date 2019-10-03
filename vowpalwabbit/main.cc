@@ -898,7 +898,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             overpredicted = 0;
         }
 
-        if (LEARNING_MODE = 6)
+        if (LEARNING_MODE == 6)
         {
           if (max < primary.curCores || primary.curCores == primary.maxCores)
           {
@@ -1024,7 +1024,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           if (LEARNING_MODE == 8)
           {
             newPrimaryCores = std::min(primary.maxCores, pred+1);
-            std::cout << "<debug> newPrimaryCores: " << newPrimaryCores << ",  primary.maxCores: " << primary.maxCores << ",  pred: " << pred << endl;
+            if (DEBUG)
+              std::cout << "<debug> newPrimaryCores: " << newPrimaryCores << ",  primary.maxCores: " << primary.maxCores << ",  pred: " << pred << endl;
           }
 
           if (TIMING)
@@ -1070,7 +1071,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         // cout << "call update: invoke_learning: " << invoke_learning << " safeguard:" << safeguard << "
         // numPrimaryCores: " << numPrimaryCores << "  hvm.curCores" << hvm.curCores<< endl;
-        cout << "<debug> numPrimaryCores = " << numPrimaryCores << endl;
+        if (DEBUG)
+          cout << "<debug> newPrimaryCores = " << newPrimaryCores << endl;
         updateCores(newPrimaryCores);
         // printf("called update: primary.curMask=0x%x\n", primary.curMask);
         // cout << "called update: primary.curMask: " << primary.curMask << " numPrimaryCores: " << numPrimaryCores << "
