@@ -75,6 +75,7 @@ const WCHAR ARG_CSV[] = L"--csv";
 const WCHAR ARG_DURATION[] = L"--duration_sec";
 const WCHAR ARG_BUFFER[] = L"--buffer";
 const WCHAR ARG_DELAY_MS[] = L"--delay_ms";
+const WCHAR ARG_REACTIVE_FIXED_BUFFER_MODE[] = L"--reactive_buffer_mode";
 const WCHAR ARG_LEARNING_MODE[] = L"--learning_mode";
 const WCHAR ARG_LEARNING_MS[] = L"--learning_ms";
 const WCHAR ARG_TIMING[] = L"--timing";
@@ -98,6 +99,7 @@ std::wstring output_csv = L"";
 int RUN_DURATION_SEC = 0;
 int bufferSize = -1;
 int FIXED_BUFFER_MODE = 0;
+int REACTIVE_FIXED_BUFFER_MODE = 0;
 int DELAY_MS = 0;
 int LEARNING_MODE = 0;
 // 1: fixed rate learning without safeguard
@@ -157,6 +159,12 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
       FIXED_BUFFER_MODE = 1;
       wcout << "bufferSize: " << bufferSize << std::endl;
     }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_REACTIVE_FIXED_BUFFER_MODE, ARRAY_SIZE(ARG_REACTIVE_FIXED_BUFFER_MODE)))
+    {
+      REACTIVE_FIXED_BUFFER_MODE = 1;
+      wcout << "REACTIVE_FIXED_BUFFER_MODE: " << REACTIVE_FIXED_BUFFER_MODE << std::endl;
+    }
+
     else if (0 == ::_wcsnicmp(argv[0], ARG_DELAY_MS, ARRAY_SIZE(ARG_DELAY_MS)))
     {
       DELAY_MS = _wtoi(argv[1]);
@@ -258,7 +266,7 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     shift;
   }
 
-  if (LEARNING_MODE != 0 || NO_HARVESTING != 0)
+  if (LEARNING_MODE != 0 || NO_HARVESTING != 0 || REACTIVE_FIXED_BUFFER_MODE != 0)
     FIXED_BUFFER_MODE = 0;
 
   wcout << "FIXED_BUFFER_MODE: " << FIXED_BUFFER_MODE << std::endl;
@@ -501,10 +509,12 @@ void init()
   ASSERT(SUCCEEDED(HVMAgent_Init(&cpuInfo)));
   std::cout << "HVMAgent initialized" << endl;
 
+  /*
   if (cpuInfo.IsHyperThreaded)
   {
     PRIMARY_SIZE /= 2;
   }
+  */
 
   primary.init(primaryNames, PRIMARY_SIZE, TRUE);
   hvm.init(secondaryName, cpuInfo.NonMinRootCores - PRIMARY_SIZE, FALSE);
@@ -700,6 +710,38 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       ASSERT(numLogEntries < MAX_RECORDS);
 
       // sleep_us = SLEEP_US;
+    }
+
+
+    else if (REACTIVE_FIXED_BUFFER_MODE)
+    {
+      start = high_resolution_clock::now();
+      max = 0;  // reset max
+
+      systemBusyMask = HVMAgent_BusyMaskCores();
+      hvmBusyCores = hvm.busyCores(systemBusyMask);
+      hvmCores = hvm.curCores;
+      primaryBusyCores = primary.busyCores(systemBusyMask);
+      primaryCores = primary.curCores;
+
+      newPrimaryCores = std::min(primaryBusyCores + bufferSize, primary.maxCores);  // re-compute primary size
+
+      if (newPrimaryCores != primary.curCores)
+      {
+        updateCores(newPrimaryCores);
+        HVMAgent_SpinUS(sleep_us);  // sleep for 1ms for cpu affinity call (if issued) to take effects
+        count++;
+        records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+            primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
+            0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
+        ASSERT(numLogEntries < MAX_RECORDS);
+      }
+
+      if (DEBUG)
+      {
+        cout << "hvmBusyCores " << hvmBusyCores << "hvmCores " << hvmCores << "primaryBusyCores " << primaryBusyCores
+             << "primaryCores " << primaryCores << endl;
+      }
     }
 
     else
