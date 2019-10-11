@@ -403,14 +403,13 @@ struct VMInfo
         ASSERT(FALSE);
       }
     }
+
+    curCoreMask = masks[curCores];
   }
 
   void setupCpuGroups()
   {
-    UINT32 minCores = 1;
-    UINT32 maxCores = cpuInfo.NonMinRootCores;
-
-    for (UINT32 i = minCores; i <= maxCores; i++)
+    for (UINT32 i = 1; i <= cpuInfo.NonMinRootCores; i++)
     {
       if (primary)
       {
@@ -425,7 +424,7 @@ struct VMInfo
 
     if (mode == CPUGROUPS)
     {
-      for (UINT32 i = minCores; i <= maxCores; i++)
+      for (UINT32 i = 1; i <= cpuInfo.NonMinRootCores; i++)
       {
         ASSERT(SUCCEEDED(HVMAgent_CreateCpuGroup(&groups[i], masks[i])));
         if (verbose)
@@ -456,6 +455,7 @@ struct VMInfo
   void updateCores(INT32 numCores)
   {
     curCores = numCores;
+
     if (primary && !updatePrimary)
     {
       return;
@@ -475,18 +475,92 @@ struct VMInfo
     }
   }
 
-  INT32 idleCores(UINT64 systemBusyMask) { return curCores - busyCores(systemBusyMask); }
+  UINT64 coreIdToMask(UINT32 coreId)
+  {
+    if (cpuInfo.IsHyperThreaded)
+    {
+      return 0x3L << (coreId * 2);
+    }
 
-  INT32 busyCores(UINT64 systemBusyMask) { return HVMAgent_CoreCount(systemBusyMask & masks[curCores]); }
+    return 0x1L << coreId;
+  }
+
+  UINT64 extractHvmCores(UINT32 numCores)
+  {
+    ASSERT(!primary);
+
+    curCores -= numCores;
+
+    UINT64 result = 0;
+
+    for (UINT32 coreId = 0; coreId < cpuInfo.PhysicalCores && numCores > 0; coreId++)
+    {
+      UINT64 coreMask = coreIdToMask(coreId);
+      if (curCoreMask & coreMask)
+      {
+        ASSERT((curCoreMask & coreMask) == coreMask);
+        result |= coreMask;
+        numCores--;
+      }
+    }
+
+    ASSERT(numCores == 0);
+
+    curCoreMask &= ~result;
+
+    ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCoresUsingMask(ipiGroup, curCoreMask)));
+
+    return result;
+  }
+
+  UINT64 extractIdleCores(UINT64 systemBusyMask, UINT32 numCores)
+  {
+    ASSERT(primary);
+    UINT64 result = 0;
+
+    curCores -= numCores;
+
+    UINT64 idleMask = ~systemBusyMask & curCoreMask;
+    for (INT32 coreId = cpuInfo.PhysicalCores - 1; coreId >= 0 && numCores > 0; coreId--)
+    {
+      UINT64 coreMask = coreIdToMask(coreId);
+      // The core belongs to the primary and is currently idle.
+      if (coreMask & idleMask)
+      {
+        ASSERT((coreMask & coreMask) == coreMask);
+        result |= coreMask;
+        numCores--;
+      }
+    }
+
+    curCoreMask &= ~result;
+
+    ASSERT(numCores == 0);
+    return result;
+  }
+
+  void addCores(UINT32 numCores, UINT64 mask)
+  {
+    curCores += numCores;
+    curCoreMask |= mask;
+
+    if (!primary)
+    {
+      ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCoresUsingMask(ipiGroup, curCoreMask)));
+    }
+  }
+
+  UINT32 busyCores(UINT64 systemBusyMask) { return HVMAgent_CoreCount(systemBusyMask & curCoreMask); }
 
   INT32 minCores;
   INT32 maxCores;
   INT32 curCores;
+  UINT64 curCoreMask;
   vector<HCS_SYSTEM> handles;
 
   GUID ipiGroup;
   GUID groups[MAX_CORES];
-  UINT64 masks[MAX_CORES]; //bit masks of cpugroup for a vm
+  UINT64 masks[MAX_CORES];  // bit masks of cpugroup for a vm
   BOOLEAN primary;
 };
 
@@ -497,10 +571,36 @@ VMInfo hvm;
 // helper functions
 /************************/
 
-void updateCores(UINT32 primaryCores)  //, UINT32 hvmCores)
+void updateCores(INT32 newPrimaryCores, UINT64 systemBusyMask)  //, UINT32 hvmCores)
 {
-  hvm.updateCores(cpuInfo.NonMinRootCores - primaryCores);
-  primary.updateCores(primaryCores);
+  if (mode == IPI)
+  {
+    ASSERT(newPrimaryCores != primary.curCores);
+
+    UINT32 delta = abs((INT32) newPrimaryCores - (INT32) primary.curCores);
+
+    if (newPrimaryCores > primary.curCores)
+    {
+      // Shrinking the hvm.
+      UINT64 coreMask = hvm.extractHvmCores(delta);
+
+      // Grow the primary.
+      primary.addCores(delta, coreMask);
+    }
+    else 
+    {
+      // Extract idle cores from primary.
+      UINT64 coreMask = primary.extractIdleCores(systemBusyMask, delta);
+
+      // Give extra cores to hvm.
+      hvm.addCores(delta, coreMask);
+    }
+  }
+  else
+  {
+    hvm.updateCores(cpuInfo.NonMinRootCores - newPrimaryCores);
+    primary.updateCores(newPrimaryCores);
+  }
 }
 
 void init()
@@ -519,8 +619,8 @@ void init()
   primary.init(primaryNames, PRIMARY_SIZE, TRUE);
   hvm.init(secondaryName, cpuInfo.NonMinRootCores - PRIMARY_SIZE, FALSE);
 
-  hvm.maxCores = cpuInfo.NonMinRootCores - bufferSize;  
-  hvm.minCores = hvm.curCores; // initial size of hvm
+  hvm.maxCores = cpuInfo.NonMinRootCores - bufferSize;
+  hvm.minCores = hvm.curCores;  // initial size of hvm
 }
 
 UINT64 busyMaskCores(UINT64 busyLpMask)
@@ -717,7 +817,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
       if (newPrimaryCores != primary.curCores)
       {
-        updateCores(newPrimaryCores);
+        updateCores(newPrimaryCores, systemBusyMask);
         HVMAgent_SpinUS(sleep_us);  // sleep for 1ms for cpu affinity call (if issued) to take effects
         count++;
       }
@@ -753,7 +853,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
       if (newPrimaryCores != primary.curCores)
       {
-        updateCores(newPrimaryCores);
+        updateCores(newPrimaryCores, systemBusyMask);
         HVMAgent_SpinUS(sleep_us);  // sleep for 1ms for cpu affinity call (if issued) to take effects
         count++;
         records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
@@ -836,7 +936,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             if (newPrimaryCores != primary.curCores)
             {
               // cout << "safeguard1" << endl;
-              updateCores(newPrimaryCores);
+              updateCores(newPrimaryCores, systemBusyMask);
               HVMAgent_SpinUS(sleep_us);
               count++;
             }
@@ -874,7 +974,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             if (newPrimaryCores != primary.curCores)
             {
               // cout << "safeguard1" << endl;
-              updateCores(newPrimaryCores);
+              updateCores(newPrimaryCores, systemBusyMask);
               HVMAgent_SpinUS(sleep_us);
               count++;
             }
@@ -1150,7 +1250,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         // numPrimaryCores: " << numPrimaryCores << "  hvm.curCores" << hvm.curCores<< endl;
         if (DEBUG)
           cout << "<debug> newPrimaryCores = " << newPrimaryCores << endl;
-        updateCores(newPrimaryCores);
+        updateCores(newPrimaryCores, systemBusyMask);
         // printf("called update: primary.curMask=0x%x\n", primary.curMask);
         // cout << "called update: primary.curMask: " << primary.curMask << " numPrimaryCores: " << numPrimaryCores << "
         // hvm.curCores" << hvm.curCores << endl;
