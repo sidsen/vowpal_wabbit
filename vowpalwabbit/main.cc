@@ -161,7 +161,7 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_REACTIVE_FIXED_BUFFER_MODE, ARRAY_SIZE(ARG_REACTIVE_FIXED_BUFFER_MODE)))
     {
-      REACTIVE_FIXED_BUFFER_MODE = 1;
+      REACTIVE_FIXED_BUFFER_MODE = _wtoi(argv[1]);
       wcout << "REACTIVE_FIXED_BUFFER_MODE: " << REACTIVE_FIXED_BUFFER_MODE << std::endl;
     }
 
@@ -284,7 +284,7 @@ struct Record
   int primaryBusy;
   int primaryCores;
   string primaryCoresMask;
-  string systemBusyMask;
+  string systemBusyMaskRaw;
   // int idleCoreCount;
   // int hvmCores;
   // UINT64 hvmMask;
@@ -332,7 +332,7 @@ void writeLogs()
     ASSERT(output_fp != NULL);
 
     fprintf(output_fp,
-        "iteration,time_sec,hvm_busy_cores,hvm_cores,primary_busy_cores,primary_cores,primary_cores_mask,system_busy_mask,f_min,f_max,f_avg,f_stddev,f_med,"
+        "iteration,time_sec,hvm_busy_cores,hvm_cores,primary_busy_cores,primary_cores,primary_cores_mask,system_busy_mask_raw,f_min,f_max,f_avg,f_stddev,f_med,"
         "pred_peak,upper_bound,cpu_max,overpredicted,safeguard,feedback_max,update_model\n");
 
     fflush(output_fp);
@@ -343,7 +343,7 @@ void writeLogs()
     {
       Record r = records[i];
       fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lld,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount, r.time,
-          r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(), r.systemBusyMask.c_str(), r.min, r.max, r.avg, r.stddev, r.med, r.pred,
+          r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(), r.systemBusyMaskRaw.c_str(), r.min, r.max, r.avg, r.stddev, r.med, r.pred,
           r.newPrimaryCores, r.cpu_max, r.overpredicted, r.safeguard, r.feedback_max, r.updateModel);
     }
     fflush(output_fp);
@@ -523,6 +523,23 @@ void init()
   hvm.minCores = hvm.curCores; // initial size of hvm
 }
 
+UINT64 busyMaskCores(UINT64 busyLpMask)
+{
+  if (!cpuInfo.IsHyperThreaded)
+  {
+    return busyLpMask;
+  }
+
+  const UINT64 EvenBits = 0x5555555555555555;
+  const UINT64 OddBits = 0xaaaaaaaaaaaaaaaa;
+
+  UINT64 evenLpMask = (busyLpMask & EvenBits);
+  UINT64 oddLpMask = (busyLpMask & OddBits);
+
+  return evenLpMask | (evenLpMask << 1) | oddLpMask | (oddLpMask >> 1);
+}
+
+
 /*
   optional 1st arg = buffer size
 */
@@ -626,9 +643,10 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
   CycleCounter timer;
   timer.Start();
-  UINT64 systemBusyMask;
+  UINT64 systemBusyMask, systemBusyMaskRaw;
   INT32 primaryBusyCores, primaryCores, hvmBusyCores, hvmCores;
   INT32 newPrimaryCores = primary.maxCores;
+
 
   while (timer.ElapsedSeconds() < RUN_DURATION_SEC)
   {
@@ -645,7 +663,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         HVMAgent_SpinUS(read_cpu_sleep_us);
 
-        systemBusyMask = HVMAgent_BusyMaskCores();
+        systemBusyMaskRaw = HVMAgent_BusyMaskRaw();
+        systemBusyMask = busyMaskCores(systemBusyMaskRaw);
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
         primaryBusyCores = primary.busyCores(systemBusyMask);
@@ -661,7 +680,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
 
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(), 0,
+          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(), 0,
           0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
       ASSERT(numLogEntries < MAX_RECORDS);
     }
@@ -671,11 +690,15 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       start = high_resolution_clock::now();
       max = 0;  // reset max
 
+      if (DEBUG)
+        cout << "fixed buffer mode" << endl;
+
       while (true)
       {
         HVMAgent_SpinUS(read_cpu_sleep_us);
 
-        systemBusyMask = HVMAgent_BusyMaskCores();
+        systemBusyMaskRaw = HVMAgent_BusyMaskRaw();
+        systemBusyMask = busyMaskCores(systemBusyMaskRaw);
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
         primaryBusyCores = primary.busyCores(systemBusyMask);
@@ -706,7 +729,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
 
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
+          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(),
+          0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
       ASSERT(numLogEntries < MAX_RECORDS);
 
       // sleep_us = SLEEP_US;
@@ -718,7 +742,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       start = high_resolution_clock::now();
       max = 0;  // reset max
 
-      systemBusyMask = HVMAgent_BusyMaskCores();
+      systemBusyMaskRaw = HVMAgent_BusyMaskRaw();
+      systemBusyMask = busyMaskCores(systemBusyMaskRaw);
       hvmBusyCores = hvm.busyCores(systemBusyMask);
       hvmCores = hvm.curCores;
       primaryBusyCores = primary.busyCores(systemBusyMask);
@@ -769,7 +794,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         if (TIMING)
           start = high_resolution_clock::now();
 
-        systemBusyMask = HVMAgent_BusyMaskCores();
+        systemBusyMaskRaw = HVMAgent_BusyMaskRaw();
+        systemBusyMask = busyMaskCores(systemBusyMaskRaw);
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
         primaryBusyCores = primary.busyCores(systemBusyMask);
@@ -817,7 +843,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
             records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
                 primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
+                bitset<64>(systemBusyMaskRaw).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
             ASSERT(numLogEntries < MAX_RECORDS);
           }
         }
@@ -855,7 +881,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
             records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
                 primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
+                bitset<64>(systemBusyMaskRaw).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
             ASSERT(numLogEntries < MAX_RECORDS);
 
             // resetting for the smaller feedback window
@@ -1132,11 +1158,11 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         HVMAgent_SpinUS(sleep_us);
         count++;
       }
-
+      
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores, primaryCores,
-        bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(), min, max, avg,
+        bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(), min, max, avg,
         stddev, med, pred, newPrimaryCores, cpu_max, overpredicted, safeguard, feedback_max, updateModel};
-
+      
       ASSERT(numLogEntries < MAX_RECORDS);
 
       // prevSafeguard = safeguard; //only workds for mode 2-4
