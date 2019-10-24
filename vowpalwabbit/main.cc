@@ -58,14 +58,6 @@ using namespace VW::config;
     }                                                        \
   } while (0);
 
-enum Mode
-{
-  INVALID,
-  IPI,
-  NEWIPI,
-  CPUGROUPS
-};
-
 //#define TOTAL_PRIMARY_CORE 6
 #define MAX_HVM_CORES 24  // 12
 #define MIN_HVM_CORES 1   // 6
@@ -87,8 +79,11 @@ const WCHAR ARG_FEEDBACK_MS[] = L"--feedback_ms";
 const WCHAR ARG_SLEEP_MS[] = L"--sleep_ms";
 const WCHAR ARG_MODE[] = L"--mode";
 const WCHAR ARG_MODE_IPI[] = L"IPI";
+const WCHAR ARG_MODE_IPI_HOLES[] = L"IPI_HOLES";
 const WCHAR ARG_MODE_CPUGROUPS[] = L"CpuGroups";
+const WCHAR ARG_MODE_DISJOINT_CPUGROUPS[] = L"DISJOINT_CpuGroups";
 const WCHAR ARG_PRIMARY_SIZE[] = L"--primary_size";
+const WCHAR ARG_MINROOT_MASK[] = L"--minroot_mask";
 const WCHAR ARG_DROP_BAD_FEATURES[] = L"--drop_bad_features";
 const WCHAR ARG_READ_CPU_SLEEP_US[] = L"--read_cpu_sleep_us";
 const WCHAR ARG_PRIMARY_NAMES[] = L"--primary_names";
@@ -123,6 +118,8 @@ int read_cpu_sleep_us = 0;
 int updatePrimary = 1;
 
 Mode mode;
+BOOL disjointCpuGroups = FALSE;
+UINT64 minRootMask = 0;
 std::wstring primaryNames = L"LatSensitive";  // L"LatSensitive-0,LatSensitive-1";
 std::wstring secondaryName = L"CPUBully";
 CpuInfo cpuInfo;
@@ -223,10 +220,21 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
         mode = CPUGROUPS;
         wcout << "MODE: CPUGROUPS" << std::endl;
       }
+      else if (0 == ::_wcsnicmp(argv[1], ARG_MODE_DISJOINT_CPUGROUPS, ARRAY_SIZE(ARG_MODE_DISJOINT_CPUGROUPS)))
+      {
+        mode = CPUGROUPS;
+        disjointCpuGroups = TRUE;
+        wcout << "MODE: DISJOINT_CPUGROUPS" << std::endl;
+      }
       else if (0 == ::_wcsnicmp(argv[1], ARG_MODE_IPI, ARRAY_SIZE(ARG_MODE_IPI)))
       {
         mode = IPI;
         wcout << "MODE: IPI" << std::endl;
+      }
+      else if (0 == ::_wcsnicmp(argv[1], ARG_MODE_IPI_HOLES, ARRAY_SIZE(ARG_MODE_IPI_HOLES)))
+      {
+        mode = IPI_HOLES;
+        wcout << "MODE: IPI_HOLES" << std::endl;
       }
       else
       {
@@ -238,6 +246,11 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     {
       PRIMARY_SIZE = _wtoi(argv[1]);
       wcout << "PRIMARY_SIZE: " << PRIMARY_SIZE << std::endl;
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_MINROOT_MASK, ARRAY_SIZE(ARG_MINROOT_MASK)))
+    {
+      minRootMask = _wtoi(argv[1]);
+      wcout << "MINROOT_MASK: " << minRootMask << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_DROP_BAD_FEATURES, ARRAY_SIZE(ARG_DROP_BAD_FEATURES)))
     {
@@ -351,219 +364,6 @@ void writeLogs()
   }
 }
 
-vector<wstring> splitString(const std::wstring& str, WCHAR delim)
-{
-  vector<wstring> result;
-  wstring temp;
-  wstringstream wss(str);
-
-  while (std::getline(wss, temp, delim))
-  {
-    if (!temp.empty())
-    {
-      result.push_back(temp);
-    }
-  }
-
-  return result;
-}
-
-struct VMInfo
-{
-  void init(wstring _vmName, INT32 _numCores, BOOLEAN _primary = FALSE)
-  {
-    minCores = 1;
-    maxCores = _numCores;
-    curCores = _numCores;
-    primary = _primary;
-
-    setupCpuGroups();
-
-    vector<wstring> vmNames = splitString(_vmName, L',');
-
-    for (const wstring& vmName : vmNames)
-    {
-      wcout << L"Initializing handle for: " << vmName << L"with _numcore:" << _numCores << endl;
-      HCS_SYSTEM handle;
-      ASSERT(SUCCEEDED(HVMAgent_GetVMHandle(vmName, &handle)));
-      handles.push_back(handle);
-
-      ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, GUID_NULL)));
-
-      if (mode == CPUGROUPS)
-      {
-        ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, groups[curCores])));
-      }
-      else if (mode == IPI)
-      {
-        ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, ipiGroup)));
-      }
-      else
-      {
-        ASSERT(FALSE);
-      }
-    }
-
-    curCoreMask = masks[curCores];
-  }
-
-  void setupCpuGroups()
-  {
-    for (UINT32 i = 1; i <= cpuInfo.NonMinRootCores; i++)
-    {
-      if (primary)
-      {
-        masks[i] = HVMAgent_GenerateCoreAffinityFromFront(i);
-      }
-      else
-      {
-        masks[i] = HVMAgent_GenerateCoreAffinityFromBack(i);
-      }
-      wcout << L"Mask " << i << L": " << masks[i] << endl;
-    }
-
-    if (mode == CPUGROUPS)
-    {
-      for (UINT32 i = 1; i <= cpuInfo.NonMinRootCores; i++)
-      {
-        ASSERT(SUCCEEDED(HVMAgent_CreateCpuGroup(&groups[i], masks[i])));
-        if (verbose)
-        {
-          PrintCpuGroupInfo(groups[i]);
-        }
-      }
-    }
-    else if (mode == IPI)
-    {
-      if (DEBUG)
-      {
-        cout << "masks[curCores]" << masks[curCores] << endl;
-        cout << "curCores" << curCores << endl;
-        if (ipiGroup == GUID_NULL)
-          cout << "ipiGroup is null" << endl;
-      }
-
-      ASSERT(SUCCEEDED(HVMAgent_CreateCpuGroup(&ipiGroup, masks[curCores])));
-      if (verbose)
-      {
-        PrintCpuGroupInfo(ipiGroup);
-      }
-    }
-  }
-
-  // assign new cpugroup to primary
-  void updateCores(INT32 numCores)
-  {
-    curCores = numCores;
-
-    if (primary && !updatePrimary)
-    {
-      return;
-    }
-
-    if (mode == CPUGROUPS)
-    {
-      for (const HCS_SYSTEM& handle : handles)
-      {
-        ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, GUID_NULL)));
-        ASSERT(SUCCEEDED(HVMAgent_AssignCpuGroupToVM(handle, groups[curCores])));
-      }
-    }
-    else if (mode == IPI)
-    {
-      ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCoresUsingMask(ipiGroup, masks[numCores])));
-    }
-  }
-
-  UINT64 coreIdToMask(UINT32 coreId)
-  {
-    if (cpuInfo.IsHyperThreaded)
-    {
-      return 0x3L << (coreId * 2);
-    }
-
-    return 0x1L << coreId;
-  }
-
-  UINT64 extractHvmCores(UINT32 numCores)
-  {
-    ASSERT(!primary);
-
-    curCores -= numCores;
-
-    UINT64 result = 0;
-
-    for (UINT32 coreId = 0; coreId < cpuInfo.PhysicalCores && numCores > 0; coreId++)
-    {
-      UINT64 coreMask = coreIdToMask(coreId);
-      if (curCoreMask & coreMask)
-      {
-        ASSERT((curCoreMask & coreMask) == coreMask);
-        result |= coreMask;
-        numCores--;
-      }
-    }
-
-    ASSERT(numCores == 0);
-
-    curCoreMask &= ~result;
-
-    ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCoresUsingMask(ipiGroup, curCoreMask)));
-
-    return result;
-  }
-
-  UINT64 extractIdleCores(UINT64 systemBusyMask, UINT32 numCores)
-  {
-    ASSERT(primary);
-    UINT64 result = 0;
-
-    curCores -= numCores;
-
-    UINT64 idleMask = ~systemBusyMask & curCoreMask;
-    for (INT32 coreId = cpuInfo.PhysicalCores - 1; coreId >= 0 && numCores > 0; coreId--)
-    {
-      UINT64 coreMask = coreIdToMask(coreId);
-      // The core belongs to the primary and is currently idle.
-      if (coreMask & idleMask)
-      {
-        ASSERT((coreMask & coreMask) == coreMask);
-        result |= coreMask;
-        numCores--;
-      }
-    }
-
-    curCoreMask &= ~result;
-
-    ASSERT(numCores == 0);
-    return result;
-  }
-
-  void addCores(UINT32 numCores, UINT64 mask)
-  {
-    curCores += numCores;
-    curCoreMask |= mask;
-
-    if (!primary)
-    {
-      ASSERT(SUCCEEDED(HVMAgent_UpdateHVMCoresUsingMask(ipiGroup, curCoreMask)));
-    }
-  }
-
-  UINT32 busyCores(UINT64 systemBusyMask) { return HVMAgent_CoreCount(systemBusyMask & curCoreMask); }
-
-  INT32 minCores;
-  INT32 maxCores;
-  INT32 curCores;
-  UINT64 curCoreMask;
-  vector<HCS_SYSTEM> handles;
-
-  GUID ipiGroup;
-  GUID groups[MAX_CORES];
-  UINT64 masks[MAX_CORES];  // bit masks of cpugroup for a vm
-  BOOLEAN primary;
-};
-
 VMInfo primary;
 VMInfo hvm;
 
@@ -573,27 +373,28 @@ VMInfo hvm;
 
 void updateCores(INT32 newPrimaryCores, UINT64 systemBusyMask)  //, UINT32 hvmCores)
 {
-  if (mode == IPI)
+  if (mode == IPI_HOLES)
   {
+    UINT64 coreMask;
     ASSERT(newPrimaryCores != primary.curCores);
 
     UINT32 delta = abs((INT32) newPrimaryCores - (INT32) primary.curCores);
 
-    if (newPrimaryCores > primary.curCores)
+    if (newPrimaryCores > (INT32) primary.curCores)
     {
       // Shrinking the hvm.
-      UINT64 coreMask = hvm.extractHvmCores(delta);
+      ASSERT(SUCCEEDED(hvm.extractHvmCores(delta, &coreMask)));
 
       // Grow the primary.
-      primary.addCores(delta, coreMask);
+      ASSERT(SUCCEEDED(primary.addCores(delta, coreMask)));
     }
     else 
     {
       // Extract idle cores from primary.
-      UINT64 coreMask = primary.extractIdleCores(systemBusyMask, delta);
+      ASSERT(SUCCEEDED(primary.extractIdleCores(systemBusyMask, delta, &coreMask)));
 
       // Give extra cores to hvm.
-      hvm.addCores(delta, coreMask);
+      ASSERT(SUCCEEDED(hvm.addCores(delta, coreMask)));
     }
   }
   else
@@ -606,7 +407,7 @@ void updateCores(INT32 newPrimaryCores, UINT64 systemBusyMask)  //, UINT32 hvmCo
 void init()
 {
   // initialize hvmagent
-  ASSERT(SUCCEEDED(HVMAgent_Init(&cpuInfo)));
+  ASSERT(SUCCEEDED(HVMAgent_InitWithMinRootMask(&cpuInfo, minRootMask)));
   std::cout << "HVMAgent initialized" << endl;
 
   /*
@@ -616,9 +417,10 @@ void init()
   }
   */
 
-  primary.init(primaryNames, PRIMARY_SIZE, TRUE);
-  hvm.init(secondaryName, cpuInfo.NonMinRootCores - PRIMARY_SIZE, FALSE);
+  ASSERT(SUCCEEDED(primary.init(mode, primaryNames, PRIMARY_SIZE, TRUE, disjointCpuGroups)));
+  ASSERT(SUCCEEDED(hvm.init(mode, secondaryName, cpuInfo.NonMinRootCores - PRIMARY_SIZE, FALSE, disjointCpuGroups)));
 
+  
   hvm.maxCores = cpuInfo.NonMinRootCores - bufferSize;
   hvm.minCores = hvm.curCores;  // initial size of hvm
 }
@@ -813,7 +615,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           break;  // log max from delay_us
       }
 
-      newPrimaryCores = std::min(primaryBusyCores + bufferSize, primary.maxCores);  // re-compute primary size
+      newPrimaryCores = std::min(primaryBusyCores + bufferSize, (INT32) primary.maxCores);  // re-compute primary size
 
       if (newPrimaryCores != primary.curCores)
       {
@@ -849,7 +651,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       primaryBusyCores = primary.busyCores(systemBusyMask);
       primaryCores = primary.curCores;
 
-      newPrimaryCores = std::min(primaryBusyCores + bufferSize, primary.maxCores);  // re-compute primary size
+      newPrimaryCores = std::min(primaryBusyCores + bufferSize, (int) primary.maxCores);  // re-compute primary size
 
       if (newPrimaryCores != primary.curCores)
       {
@@ -968,7 +770,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             }
 
             // adjust primary size
-            newPrimaryCores = std::min(newPrimaryCores, primary.maxCores);
+            newPrimaryCores = std::min(newPrimaryCores, (INT32)primary.maxCores);
             // newPrimaryCores = std::max(newPrimaryCores, pred);
             // update hvm size
             if (newPrimaryCores != primary.curCores)
@@ -1065,7 +867,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 ||
             LEARNING_MODE == 8 || LEARNING_MODE == 9 || LEARNING_MODE == 10 || LEARNING_MODE == 11)
         {  // mode 1&2 need to decide overprediction here
-          if (max < primary.curCores || primary.curCores == primary.maxCores)
+          if (max < (INT32) primary.curCores || primary.curCores == primary.maxCores)
             overpredicted = 1;
           else
             overpredicted = 0;
@@ -1073,7 +875,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
         if (LEARNING_MODE == 6)
         {
-          if (max < primary.curCores || primary.curCores == primary.maxCores)
+          if (max < (INT32) primary.curCores || primary.curCores == primary.maxCores)
           {
             overpredicted = 1;
             buffer_empty_consecutive_count = 0;
@@ -1147,7 +949,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               correct_class = max + 1;
             }
 
-            for (int k = 1; k < primary.maxCores + 1; k++)
+            for (int k = 1; k < (INT32) primary.maxCores + 1; k++)
             {
               if (k < correct_class)
                 cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
@@ -1197,14 +999,14 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           // read current busy status?
           if (use_curr_busy)
             newPrimaryCores = std::min(std::max(pred, primaryBusyCores + 1),
-                primary.maxCores);  // keep at least 1 core in addition to current busy
+                (INT32) primary.maxCores);  // keep at least 1 core in addition to current busy
           else
             newPrimaryCores = std::min(std::max(pred, max + 1),
-                primary.maxCores);  // keep at least 1 core in addition to max from the past window
+                (INT32) primary.maxCores);  // keep at least 1 core in addition to max from the past window
 
           if (LEARNING_MODE == 8 || LEARNING_MODE == 10)
           {
-            newPrimaryCores = std::min(std::max(pred + 1, primaryBusyCores + 1), primary.maxCores);
+            newPrimaryCores = std::min(std::max(pred + 1, primaryBusyCores + 1), (INT32) primary.maxCores);
             if (DEBUG)
               std::cout << "<debug> newPrimaryCores: " << newPrimaryCores << ",  primary.maxCores: " << primary.maxCores
                         << ",  pred: " << pred << endl;
