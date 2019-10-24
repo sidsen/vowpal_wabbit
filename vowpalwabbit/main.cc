@@ -249,7 +249,7 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_MINROOT_MASK, ARRAY_SIZE(ARG_MINROOT_MASK)))
     {
-      minRootMask = _wtoi(argv[1]);
+      minRootMask = _wcstoui64(argv[1], NULL, 0);
       wcout << "MINROOT_MASK: " << minRootMask << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_DROP_BAD_FEATURES, ARRAY_SIZE(ARG_DROP_BAD_FEATURES)))
