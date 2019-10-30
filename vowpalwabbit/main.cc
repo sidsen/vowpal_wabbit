@@ -617,6 +617,11 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
       newPrimaryCores = std::min(primaryBusyCores + bufferSize, (INT32) primary.maxCores);  // re-compute primary size
 
+      records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(),
+          0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
+      ASSERT(numLogEntries < MAX_RECORDS);
+
       if (newPrimaryCores != primary.curCores)
       {
         updateCores(newPrimaryCores, systemBusyMask);
@@ -630,10 +635,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
              << "primaryCores " << primaryCores << endl;
       }
 
-      records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(),
-          0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
-      ASSERT(numLogEntries < MAX_RECORDS);
+      
 
       // sleep_us = SLEEP_US;
     }
@@ -655,13 +657,14 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
       if (newPrimaryCores != primary.curCores)
       {
-        updateCores(newPrimaryCores, systemBusyMask);
-        HVMAgent_SpinUS(sleep_us);  // sleep for 1ms for cpu affinity call (if issued) to take effects
-        count++;
         records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
             primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
             0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
         ASSERT(numLogEntries < MAX_RECORDS);
+
+        updateCores(newPrimaryCores, systemBusyMask);
+        HVMAgent_SpinUS(sleep_us);  // sleep for 1ms for cpu affinity call (if issued) to take effects
+        count++;
       }
 
       if (DEBUG)
@@ -735,6 +738,12 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             // give all cores back to primary for mode3
             newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
 
+            records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+                primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
+                bitset<64>(systemBusyMaskRaw).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0,
+                updateModel};
+            ASSERT(numLogEntries < MAX_RECORDS);
+
             if (newPrimaryCores != primary.curCores)
             {
               // cout << "safeguard1" << endl;
@@ -742,11 +751,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               HVMAgent_SpinUS(sleep_us);
               count++;
             }
-
-            records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-                primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMaskRaw).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
-            ASSERT(numLogEntries < MAX_RECORDS);
           }
         }
 
@@ -772,6 +776,13 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             // adjust primary size
             newPrimaryCores = std::min(newPrimaryCores, (INT32)primary.maxCores);
             // newPrimaryCores = std::max(newPrimaryCores, pred);
+
+            records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+            primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
+            bitset<64>(systemBusyMaskRaw).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0,
+            updateModel};
+            ASSERT(numLogEntries < MAX_RECORDS);
+
             // update hvm size
             if (newPrimaryCores != primary.curCores)
             {
@@ -780,11 +791,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               HVMAgent_SpinUS(sleep_us);
               count++;
             }
-
-            records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-                primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMaskRaw).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
-            ASSERT(numLogEntries < MAX_RECORDS);
 
             // resetting for the smaller feedback window
             feedback_max = 0;
@@ -1045,6 +1051,11 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
       }
 
+      records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(),
+          min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max, overpredicted, safeguard, feedback_max,
+          updateModel};
+
       /****** update CPU affinity ******/
       if (newPrimaryCores != primary.curCores)
       {
@@ -1061,9 +1072,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         count++;
       }
       
-      records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores, primaryCores,
-        bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(), min, max, avg,
-        stddev, med, pred, newPrimaryCores, cpu_max, overpredicted, safeguard, feedback_max, updateModel};
       
       ASSERT(numLogEntries < MAX_RECORDS);
 
