@@ -38,6 +38,7 @@ license as described in the file LICENSE.
 #include <cguid.h>
 #include <chrono>
 #include <algorithm>
+#include <ctime>
 
 #include "cyclecounter.h"
 
@@ -88,7 +89,6 @@ const WCHAR ARG_DROP_BAD_FEATURES[] = L"--drop_bad_features";
 const WCHAR ARG_READ_CPU_SLEEP_US[] = L"--read_cpu_sleep_us";
 const WCHAR ARG_PRIMARY_NAMES[] = L"--primary_names";
 const WCHAR ARG_UPDATE_PRIMARY[] = L"--update_primary";
-
 
 std::wstring output_csv = L"";
 int RUN_DURATION_SEC = 0;
@@ -345,7 +345,8 @@ void writeLogs()
     ASSERT(output_fp != NULL);
 
     fprintf(output_fp,
-        "iteration,time_sec,hvm_busy_cores,hvm_cores,primary_busy_cores,primary_cores,primary_cores_mask,system_busy_mask_raw,f_min,f_max,f_avg,f_stddev,f_med,"
+        "iteration,time_sec,hvm_busy_cores,hvm_cores,primary_busy_cores,primary_cores,primary_cores_mask,system_busy_"
+        "mask_raw,f_min,f_max,f_avg,f_stddev,f_med,"
         "pred_peak,upper_bound,cpu_max,overpredicted,safeguard,feedback_max,update_model\n");
 
     fflush(output_fp);
@@ -356,8 +357,9 @@ void writeLogs()
     {
       Record r = records[i];
       fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lld,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount, r.time,
-          r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(), r.systemBusyMaskRaw.c_str(), r.min, r.max, r.avg, r.stddev, r.med, r.pred,
-          r.newPrimaryCores, r.cpu_max, r.overpredicted, r.safeguard, r.feedback_max, r.updateModel);
+          r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(), r.systemBusyMaskRaw.c_str(),
+          r.min, r.max, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max, r.overpredicted, r.safeguard,
+          r.feedback_max, r.updateModel);
     }
     fflush(output_fp);
     cout << "logs written" << endl;
@@ -378,9 +380,9 @@ void updateCores(INT32 newPrimaryCores, UINT64 systemBusyMask)  //, UINT32 hvmCo
     UINT64 coreMask;
     ASSERT(newPrimaryCores != primary.curCores);
 
-    UINT32 delta = abs((INT32) newPrimaryCores - (INT32) primary.curCores);
+    UINT32 delta = abs((INT32)newPrimaryCores - (INT32)primary.curCores);
 
-    if (newPrimaryCores > (INT32) primary.curCores)
+    if (newPrimaryCores > (INT32)primary.curCores)
     {
       // Shrinking the hvm.
       ASSERT(SUCCEEDED(hvm.extractHvmCores(delta, &coreMask)));
@@ -388,7 +390,7 @@ void updateCores(INT32 newPrimaryCores, UINT64 systemBusyMask)  //, UINT32 hvmCo
       // Grow the primary.
       ASSERT(SUCCEEDED(primary.addCores(delta, coreMask)));
     }
-    else 
+    else
     {
       // Extract idle cores from primary.
       ASSERT(SUCCEEDED(primary.extractIdleCores(systemBusyMask, delta, &coreMask)));
@@ -420,7 +422,6 @@ void init()
   ASSERT(SUCCEEDED(primary.init(mode, primaryNames, PRIMARY_SIZE, TRUE, disjointCpuGroups)));
   ASSERT(SUCCEEDED(hvm.init(mode, secondaryName, cpuInfo.NonMinRootCores - PRIMARY_SIZE, FALSE, disjointCpuGroups)));
 
-  
   hvm.maxCores = cpuInfo.NonMinRootCores - bufferSize;
   hvm.minCores = hvm.curCores;  // initial size of hvm
 }
@@ -441,7 +442,6 @@ UINT64 busyMaskCores(UINT64 busyLpMask)
   return evenLpMask | (evenLpMask << 1) | oddLpMask | (oddLpMask >> 1);
 }
 
-
 /*
   optional 1st arg = buffer size
 */
@@ -451,7 +451,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   verbose = FALSE;
   process_args(argc, argv);
   int sleep_us = SLEEP_MS * 1000;
-
 
   /************************/
   // initialize HVM agent
@@ -549,6 +548,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   INT32 primaryBusyCores, primaryCores, hvmBusyCores, hvmCores;
   INT32 newPrimaryCores = primary.maxCores;
 
+  time_t now = time(0);
+  char* dt = ctime(&now);
+  cout << "HVM agent starting: " << dt << endl;
 
   while (timer.ElapsedSeconds() < RUN_DURATION_SEC)
   {
@@ -582,8 +584,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
 
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(), 0,
-          0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
+          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(),
+          0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
       ASSERT(numLogEntries < MAX_RECORDS);
     }
 
@@ -615,7 +617,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           break;  // log max from delay_us
       }
 
-      newPrimaryCores = std::min(primaryBusyCores + bufferSize, (INT32) primary.maxCores);  // re-compute primary size
+      newPrimaryCores = std::min(primaryBusyCores + bufferSize, (INT32)primary.maxCores);  // re-compute primary size
 
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
           primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(),
@@ -635,11 +637,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
              << "primaryCores " << primaryCores << endl;
       }
 
-      
-
       // sleep_us = SLEEP_US;
     }
-
 
     else if (REACTIVE_FIXED_BUFFER_MODE)
     {
@@ -653,7 +652,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       primaryBusyCores = primary.busyCores(systemBusyMask);
       primaryCores = primary.curCores;
 
-      newPrimaryCores = std::min(primaryBusyCores + bufferSize, (int) primary.maxCores);  // re-compute primary size
+      newPrimaryCores = std::min(primaryBusyCores + bufferSize, (int)primary.maxCores);  // re-compute primary size
 
       if (newPrimaryCores != primary.curCores)
       {
@@ -778,9 +777,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             // newPrimaryCores = std::max(newPrimaryCores, pred);
 
             records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-            primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-            bitset<64>(systemBusyMaskRaw).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0,
-            updateModel};
+                primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
+                bitset<64>(systemBusyMaskRaw).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0,
+                updateModel};
             ASSERT(numLogEntries < MAX_RECORDS);
 
             // update hvm size
@@ -873,7 +872,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 ||
             LEARNING_MODE == 8 || LEARNING_MODE == 9 || LEARNING_MODE == 10 || LEARNING_MODE == 11)
         {  // mode 1&2 need to decide overprediction here
-          if (max < (INT32) primary.curCores || primary.curCores == primary.maxCores)
+          if (max < (INT32)primary.curCores || primary.curCores == primary.maxCores)
             overpredicted = 1;
           else
             overpredicted = 0;
@@ -881,7 +880,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
         if (LEARNING_MODE == 6)
         {
-          if (max < (INT32) primary.curCores || primary.curCores == primary.maxCores)
+          if (max < (INT32)primary.curCores || primary.curCores == primary.maxCores)
           {
             overpredicted = 1;
             buffer_empty_consecutive_count = 0;
@@ -955,7 +954,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               correct_class = max + 1;
             }
 
-            for (int k = 1; k < (INT32) primary.maxCores + 1; k++)
+            for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
             {
               if (k < correct_class)
                 cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
@@ -1005,14 +1004,14 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           // read current busy status?
           if (use_curr_busy)
             newPrimaryCores = std::min(std::max(pred, primaryBusyCores + 1),
-                (INT32) primary.maxCores);  // keep at least 1 core in addition to current busy
+                (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
           else
-            newPrimaryCores = std::min(std::max(pred, max + 1),
-                (INT32) primary.maxCores);  // keep at least 1 core in addition to max from the past window
+            newPrimaryCores = std::min(std::max(pred, cpu_max + 1),
+                (INT32)primary.maxCores);  // keep at least 1 core in addition to max from the past window
 
           if (LEARNING_MODE == 8 || LEARNING_MODE == 10)
           {
-            newPrimaryCores = std::min(std::max(pred + 1, primaryBusyCores + 1), (INT32) primary.maxCores);
+            newPrimaryCores = std::min(std::max(pred + 1, primaryBusyCores + 1), (INT32)primary.maxCores);
             if (DEBUG)
               std::cout << "<debug> newPrimaryCores: " << newPrimaryCores << ",  primary.maxCores: " << primary.maxCores
                         << ",  pred: " << pred << endl;
@@ -1044,7 +1043,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           if (LEARNING_MODE == 5)
           {
             // mode 5 uses less aggressive safeguard
-            newPrimaryCores = std::min(primary.maxCores, primary.curCores + 1);
+            newPrimaryCores = std::min(primary.maxCores, primary.curCores*2);
           }
 
           // safeguard = 1;
@@ -1071,8 +1070,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         HVMAgent_SpinUS(sleep_us);
         count++;
       }
-      
-      
+
       ASSERT(numLogEntries < MAX_RECORDS);
 
       // prevSafeguard = safeguard; //only workds for mode 2-4
