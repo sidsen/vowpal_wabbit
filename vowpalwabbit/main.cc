@@ -318,11 +318,20 @@ struct Record
   // int ipiFailCount;
 };
 
+struct RecordCPU
+{ double time;
+  int cpuBusy;
+};
+
+
 extern BOOLEAN verbose;
 
 #define MAX_RECORDS 10000000L
 Record records[MAX_RECORDS];
 UINT64 numLogEntries = 0;
+RecordCPU recordsCPU[MAX_RECORDS];
+UINT64 numLogEntriesCPU = 0;
+BOOLEAN DEBUG_PEAK = 0; 
 
 /*
 Record createRecord(int updateCount, float time, int hvmIdle, int hvmCores, int primaryIdle, int primaryBusy, int
@@ -348,7 +357,6 @@ void writeLogs()
         "iteration,time_sec,hvm_busy_cores,hvm_cores,primary_busy_cores,primary_cores,primary_cores_mask,system_busy_"
         "mask_raw,f_min,f_max,f_avg,f_stddev,f_med,"
         "pred_peak,upper_bound,cpu_max,overpredicted,safeguard,feedback_max,update_model\n");
-
     fflush(output_fp);
 
     // ASSERT(SetConsoleCtrlHandler(consoleHandler, TRUE));
@@ -356,13 +364,42 @@ void writeLogs()
     for (size_t i = 0; i < numLogEntries; i++)
     {
       Record r = records[i];
-      fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lld,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount, r.time,
-          r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(), r.systemBusyMaskRaw.c_str(),
-          r.min, r.max, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max, r.overpredicted, r.safeguard,
-          r.feedback_max, r.updateModel);
+      if (DEBUG_PEAK)
+        fprintf(output_fp, "%d,%.6lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lld,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount,
+            r.time, r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(),
+            r.systemBusyMaskRaw.c_str(), r.min, r.max, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max,
+            r.overpredicted, r.safeguard, r.feedback_max, r.updateModel);
+      else
+        fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lld,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount,
+            r.time, r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(),
+            r.systemBusyMaskRaw.c_str(), r.min, r.max, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max,
+            r.overpredicted, r.safeguard, r.feedback_max, r.updateModel);
     }
+
     fflush(output_fp);
     cout << "logs written" << endl;
+  }
+
+  if (DEBUG_PEAK)
+  {
+    wstring output_cpu_csv = L"";
+    for (int i = 0; i < output_csv.size() - 4; i++)
+    {
+      output_cpu_csv += output_csv.c_str()[i];
+    }
+    output_cpu_csv += L"_cpu.csv";
+
+    FILE* output_cpu_fp = nullptr;
+    output_cpu_fp = _wfopen(output_cpu_csv.c_str(), L"w+");
+    ASSERT(output_cpu_fp != NULL);
+    fprintf(output_cpu_fp, "time_sec,primary_busy_cores\n");
+    for (size_t i = 0; i < numLogEntriesCPU; i++)
+    {
+      RecordCPU r = recordsCPU[i];
+      fprintf(output_cpu_fp, "%.6lf,%d\n", r.time, r.cpuBusy);
+    }
+    fflush(output_fp);
+    cout << "busy cpu logs written" << endl;
   }
 }
 
@@ -457,7 +494,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   /************************/
   init();
 
-  cout << "HVM agent initialized" << endl;
+  time_t now = time(0);
+  char* dt = ctime(&now);
+  cout << "HVM agent initialized: " << dt << endl;
 
   /************************/
   // set up latency measurements
@@ -548,8 +587,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   INT32 primaryBusyCores, primaryCores, hvmBusyCores, hvmCores;
   INT32 newPrimaryCores = primary.maxCores;
 
-  time_t now = time(0);
-  char* dt = ctime(&now);
+  now = time(0);
+  dt = ctime(&now);
   cout << "HVM agent starting: " << dt << endl;
 
   while (timer.ElapsedSeconds() < RUN_DURATION_SEC)
@@ -576,6 +615,11 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
         if (primaryBusyCores > max)
           max = primaryBusyCores;
+        if (DEBUG_PEAK)
+        {
+          recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores};
+          ASSERT(numLogEntries < MAX_RECORDS);
+        }
 
         stop = high_resolution_clock::now();
         us_elapsed = duration_cast<microseconds>(stop - start);
@@ -1043,7 +1087,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           if (LEARNING_MODE == 5)
           {
             // mode 5 uses less aggressive safeguard
-            newPrimaryCores = std::min(primary.maxCores, primary.curCores*2);
+            newPrimaryCores = std::min(primary.maxCores, primary.curCores * 2);
           }
 
           // safeguard = 1;

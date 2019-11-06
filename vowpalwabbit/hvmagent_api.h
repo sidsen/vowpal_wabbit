@@ -167,7 +167,7 @@ struct VMInfo
             {
                 masks[i] = HVMAgent_GenerateCoreAffinityFromBack(i);
             }
-            std::wcout << L"Mask " << i << L": " << std::hex << masks[i] << std::dec << std::endl;
+            std::wcout << L"Mask " << i << L": " << std::hex << masks[i] << L" " <<std::dec << masks[i] << std::endl;
         }
 
         curCoreMask = masks[curCores];
