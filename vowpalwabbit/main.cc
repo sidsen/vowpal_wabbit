@@ -70,6 +70,7 @@ const WCHAR ARG_BUFFER[] = L"--buffer";
 const WCHAR ARG_DELAY_MS[] = L"--delay_ms";
 const WCHAR ARG_REACTIVE_FIXED_BUFFER_MODE[] = L"--reactive_buffer_mode";
 const WCHAR ARG_LEARNING_MODE[] = L"--learning_mode";
+const WCHAR ARG_LEARNING_PRED_ONE_OVER[] = L"--pred_one_over";
 const WCHAR ARG_LEARNING_MS[] = L"--learning_ms";
 const WCHAR ARG_TIMING[] = L"--timing";
 const WCHAR ARG_DEBUG[] = L"--debug";
@@ -100,6 +101,7 @@ int LEARNING_MODE = 0;
 // 1: fixed rate learning without safeguard
 // 2: fixed rate learning with safeguard
 // 3: moving rate learning
+int PRED_ONE_OVER = 0;
 int LEARNING_MS = 0;  // prediction window in ms
 int TIMING = 0;       // measure vw timing
 int DEBUG = 0;        // print debug messages
@@ -171,6 +173,11 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     {
       LEARNING_MODE = _wtoi(argv[1]);
       wcout << "LEARNING_MODE: " << LEARNING_MODE << std::endl;
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_PRED_ONE_OVER, ARRAY_SIZE(ARG_LEARNING_PRED_ONE_OVER)))
+    {
+      PRED_ONE_OVER = _wtoi(argv[1]);
+      wcout << "PRED_ONE_OVER: " << PRED_ONE_OVER << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_MS, ARRAY_SIZE(ARG_LEARNING_MS)))
     {
@@ -298,11 +305,6 @@ struct Record
   int primaryCores;
   string primaryCoresMask;
   string systemBusyMaskRaw;
-  // int idleCoreCount;
-  // int hvmCores;
-  // UINT64 hvmMask;
-  // UINT64 idleMask;
-  // int primaryBusy;
   int min;
   int max;
   double avg;
@@ -315,35 +317,22 @@ struct Record
   int safeguard;
   int feedback_max;
   int updateModel;
-  // int ipiFailCount;
 };
 
 struct RecordCPU
-{ double time;
+{
+  double time;
   int cpuBusy;
 };
-
 
 extern BOOLEAN verbose;
 
 #define MAX_RECORDS 10000000L
 Record records[MAX_RECORDS];
 UINT64 numLogEntries = 0;
-RecordCPU recordsCPU[MAX_RECORDS];
+RecordCPU recordsCPU[20000000];
 UINT64 numLogEntriesCPU = 0;
-BOOLEAN DEBUG_PEAK = 0; 
-
-/*
-Record createRecord(int updateCount, float time, int hvmIdle, int hvmCores, int primaryIdle, int primaryBusy, int
-primaryCores, int min, int max, int avg, int stddev, int med, int pred, int newPrimaryCores, int cpu_max, int
-overpredicted, int safeguard, int feedback_max)
-{
-  Record r = {updateCount, float time, int hvmIdle, int hvmCores, int primaryIdle, int primaryBusy, int primaryCores,
-      int min, int max, int avg, int stddev, int med, int pred, int newPrimaryCores, int cpu_max, int overpredicted,
-      int safeguard, int feedback_max};
-  return r;
-}
-*/
+BOOLEAN DEBUG_PEAK = 1;
 
 void writeLogs()
 {
@@ -566,7 +555,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   // learning tweaks
   /************************/
   int use_curr_busy = 1;
-
   std::cout << "************************" << endl;
   std::cout << "always update learning model (even for under-predictions)" << endl;
   if (use_curr_busy)
@@ -748,6 +736,14 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         hvmCores = hvm.curCores;
         primaryBusyCores = primary.busyCores(systemBusyMask);
         primaryCores = primary.curCores;
+
+
+        if (DEBUG_PEAK)
+        {
+          recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores};
+          ASSERT(numLogEntries < MAX_RECORDS);
+        }
+
 
         if (TIMING)
         {
@@ -991,12 +987,10 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             /* create cost label */
             vwLabel.clear();
 
-            correct_class = max;
-
-            if (LEARNING_MODE == 9 || LEARNING_MODE == 11)
-            {  // mode 9 tries new cost function
-              correct_class = max + 1;
-            }
+            if (PRED_ONE_OVER)
+              correct_class = std::min(max + 1, (INT32)primary.maxCores);
+            else
+              correct_class = max;
 
             for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
             {
