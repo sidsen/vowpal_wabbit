@@ -71,6 +71,7 @@ const WCHAR ARG_DELAY_MS[] = L"--delay_ms";
 const WCHAR ARG_REACTIVE_FIXED_BUFFER_MODE[] = L"--reactive_buffer_mode";
 const WCHAR ARG_LEARNING_MODE[] = L"--learning_mode";
 const WCHAR ARG_LEARNING_PRED_ONE_OVER[] = L"--pred_one_over";
+const WCHAR ARG_FIXED_DELAY[] = L"--fixed_delay";
 const WCHAR ARG_LEARNING_MS[] = L"--learning_ms";
 const WCHAR ARG_TIMING[] = L"--timing";
 const WCHAR ARG_DEBUG[] = L"--debug";
@@ -102,6 +103,7 @@ int LEARNING_MODE = 0;
 // 2: fixed rate learning with safeguard
 // 3: moving rate learning
 int PRED_ONE_OVER = 0;
+int FIXED_DELAY = 0;
 int LEARNING_MS = 0;  // prediction window in ms
 int TIMING = 0;       // measure vw timing
 int DEBUG = 0;        // print debug messages
@@ -178,6 +180,11 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     {
       PRED_ONE_OVER = _wtoi(argv[1]);
       wcout << "PRED_ONE_OVER: " << PRED_ONE_OVER << std::endl;
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_FIXED_DELAY, ARRAY_SIZE(ARG_FIXED_DELAY)))
+    {
+      FIXED_DELAY = _wtoi(argv[1]);
+      wcout << "FIXED_DELAY: " << FIXED_DELAY << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_MS, ARRAY_SIZE(ARG_LEARNING_MS)))
     {
@@ -556,7 +563,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   /************************/
   int use_curr_busy = 1;
   std::cout << "************************" << endl;
-  std::cout << "always update learning model (even for under-predictions)" << endl;
+  std::cout << "always update learning model" << endl;
+  std::cout << "update under-predictions with (correct_label = observed_peak+1)" << endl;
   if (use_curr_busy)
     std::cout << "use current busy" << endl;
   else
@@ -987,7 +995,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             /* create cost label */
             vwLabel.clear();
 
-            if (PRED_ONE_OVER)
+            if (safeguard || PRED_ONE_OVER || ((LEARNING_MODE == 1 && !overpredicted)))
               correct_class = std::min(max + 1, (INT32)primary.maxCores);
             else
               correct_class = max;
@@ -1096,17 +1104,18 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       /****** update CPU affinity ******/
       if (newPrimaryCores != primary.curCores)
       {
-        // cout << "call update: invoke_learning: " << invoke_learning << " safeguard:" << safeguard << "
-        // numPrimaryCores: " << numPrimaryCores << "  hvm.curCores" << hvm.curCores<< endl;
         if (DEBUG)
           cout << "<debug> newPrimaryCores = " << newPrimaryCores << endl;
         updateCores(newPrimaryCores, systemBusyMask);
         // printf("called update: primary.curMask=0x%x\n", primary.curMask);
-        // cout << "called update: primary.curMask: " << primary.curMask << " numPrimaryCores: " << numPrimaryCores << "
-        // hvm.curCores" << hvm.curCores << endl;
 
         HVMAgent_SpinUS(sleep_us);
         count++;
+      }
+      else
+      {
+        if (FIXED_DELAY)
+          HVMAgent_SpinUS(sleep_us);
       }
 
       ASSERT(numLogEntries < MAX_RECORDS);
