@@ -142,6 +142,9 @@ struct VMInfo
             if (mode == CPUGROUPS)
             {
                 CHECK_CALL(HVMAgent_AssignCpuGroupToVM(handle, groups[curCores]), "Failed to assign CpuGroup to VM");
+                OLECHAR *guidString;
+                StringFromCLSID(groups[curCores], &guidString);
+                std::wcout << L"Assigning CpuGroup " << guidString << " to VM " << vmName << std::endl;
             }
             else if (mode == IPI || mode == IPI_HOLES)
             {

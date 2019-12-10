@@ -91,6 +91,9 @@ const WCHAR ARG_DROP_BAD_FEATURES[] = L"--drop_bad_features";
 const WCHAR ARG_READ_CPU_SLEEP_US[] = L"--read_cpu_sleep_us";
 const WCHAR ARG_PRIMARY_NAMES[] = L"--primary_names";
 const WCHAR ARG_UPDATE_PRIMARY[] = L"--update_primary";
+const WCHAR ARG_DEBUG_PEAK[] = L"--debug_peak";
+const WCHAR ARG_LOGGING[] = L"--logging";
+
 
 std::wstring output_csv = L"";
 int RUN_DURATION_SEC = 0;
@@ -120,6 +123,8 @@ std::wstring MODE = L"";
 int dropBadFeatures = 0;
 int read_cpu_sleep_us = 0;
 int updatePrimary = 1;
+int DEBUG_PEAK = 1;
+int LOGGING = 1;
 
 Mode mode;
 BOOL disjointCpuGroups = FALSE;
@@ -142,90 +147,73 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     if (0 == ::_wcsnicmp(argv[0], ARG_CSV, ARRAY_SIZE(ARG_CSV)))
     {
       output_csv = argv[1];
-      wcout << "output_csv: " << output_csv << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_PRIMARY_NAMES, ARRAY_SIZE(ARG_PRIMARY_NAMES)))
     {
       primaryNames = argv[1];
-      wcout << "primaryNames: " << primaryNames << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_DURATION, ARRAY_SIZE(ARG_DURATION)))
     {
       RUN_DURATION_SEC = _wtoi(argv[1]);
-      wcout << "RUN_DURATION_SEC: " << RUN_DURATION_SEC << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_BUFFER, ARRAY_SIZE(ARG_BUFFER)))
     {
       bufferSize = _wtoi(argv[1]);
       FIXED_BUFFER_MODE = 1;
-      wcout << "bufferSize: " << bufferSize << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_REACTIVE_FIXED_BUFFER_MODE, ARRAY_SIZE(ARG_REACTIVE_FIXED_BUFFER_MODE)))
     {
       REACTIVE_FIXED_BUFFER_MODE = _wtoi(argv[1]);
-      wcout << "REACTIVE_FIXED_BUFFER_MODE: " << REACTIVE_FIXED_BUFFER_MODE << std::endl;
     }
 
     else if (0 == ::_wcsnicmp(argv[0], ARG_DELAY_MS, ARRAY_SIZE(ARG_DELAY_MS)))
     {
       DELAY_MS = _wtoi(argv[1]);
-      wcout << "DELAY_MS: " << DELAY_MS << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_MODE, ARRAY_SIZE(ARG_LEARNING_MODE)))
     {
       LEARNING_MODE = _wtoi(argv[1]);
-      wcout << "LEARNING_MODE: " << LEARNING_MODE << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_PRED_ONE_OVER, ARRAY_SIZE(ARG_LEARNING_PRED_ONE_OVER)))
     {
       PRED_ONE_OVER = _wtoi(argv[1]);
-      wcout << "PRED_ONE_OVER: " << PRED_ONE_OVER << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_FIXED_DELAY, ARRAY_SIZE(ARG_FIXED_DELAY)))
     {
       FIXED_DELAY = _wtoi(argv[1]);
-      wcout << "FIXED_DELAY: " << FIXED_DELAY << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_MS, ARRAY_SIZE(ARG_LEARNING_MS)))
     {
       LEARNING_MS = _wtoi(argv[1]);
-      wcout << "LEARNING_MS: " << LEARNING_MS << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_TIMING, ARRAY_SIZE(ARG_TIMING)))
     {
       TIMING = _wtoi(argv[1]);
-      wcout << "TIMING: " << TIMING << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_DEBUG, ARRAY_SIZE(ARG_DEBUG)))
     {
       DEBUG = _wtoi(argv[1]);
-      wcout << "DEBUG: " << DEBUG << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_NO_HARVESTING, ARRAY_SIZE(ARG_NO_HARVESTING)))
     {
       NO_HARVESTING = _wtoi(argv[1]);
-      wcout << "NO_HARVESTING: " << NO_HARVESTING << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_PRIMARY_ALONE, ARRAY_SIZE(ARG_PRIMARY_ALONE)))
     {
       PRIMARY_ALONE = _wtoi(argv[1]);
-      wcout << "PRIMARY_ALONE: " << PRIMARY_ALONE << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_FEEDBACK, ARRAY_SIZE(ARG_FEEDBACK)))
     {
       FEEDBACK = _wtoi(argv[1]);
-      wcout << "FEEDBACK: " << FEEDBACK << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_FEEDBACK_MS, ARRAY_SIZE(ARG_FEEDBACK_MS)))
     {
       FEEDBACK_MS = _wtoi(argv[1]);
-      wcout << "FEEDBACK_MS: " << FEEDBACK_MS << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_SLEEP_MS, ARRAY_SIZE(ARG_SLEEP_MS)))
     {
       SLEEP_MS = _wtoi(argv[1]);
       SLEEP_US = SLEEP_MS * 1000;
-      wcout << "SLEEP_MS: " << SLEEP_MS << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_MODE, ARRAY_SIZE(ARG_MODE)))
     {
@@ -259,27 +247,30 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     else if (0 == ::_wcsnicmp(argv[0], ARG_PRIMARY_SIZE, ARRAY_SIZE(ARG_PRIMARY_SIZE)))
     {
       PRIMARY_SIZE = _wtoi(argv[1]);
-      wcout << "PRIMARY_SIZE: " << PRIMARY_SIZE << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_MINROOT_MASK, ARRAY_SIZE(ARG_MINROOT_MASK)))
     {
       minRootMask = _wcstoui64(argv[1], NULL, 0);
-      wcout << "MINROOT_MASK: " << minRootMask << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_DROP_BAD_FEATURES, ARRAY_SIZE(ARG_DROP_BAD_FEATURES)))
     {
       dropBadFeatures = _wtoi(argv[1]);
-      wcout << "dropBadFeatures: " << dropBadFeatures << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_READ_CPU_SLEEP_US, ARRAY_SIZE(ARG_READ_CPU_SLEEP_US)))
     {
       read_cpu_sleep_us = _wtoi(argv[1]);
-      wcout << "read_cpu_sleep_us: " << read_cpu_sleep_us << std::endl;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_UPDATE_PRIMARY, ARRAY_SIZE(ARG_UPDATE_PRIMARY)))
     {
       updatePrimary = _wtoi(argv[1]);
-      wcout << "updatePrimary: " << updatePrimary << std::endl;
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_DEBUG_PEAK, ARRAY_SIZE(ARG_DEBUG_PEAK)))
+    {
+      DEBUG_PEAK = _wtoi(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_LOGGING, ARRAY_SIZE(ARG_LOGGING)))
+    {
+      LOGGING = _wtoi(argv[1]);
     }
     else
     {
@@ -295,6 +286,33 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
 
   if (LEARNING_MODE != 0 || NO_HARVESTING != 0 || REACTIVE_FIXED_BUFFER_MODE != 0)
     FIXED_BUFFER_MODE = 0;
+
+
+  wcout << "output_csv: " << output_csv << std::endl;
+  wcout << "primaryNames: " << primaryNames << std::endl;
+  wcout << "RUN_DURATION_SEC: " << RUN_DURATION_SEC << std::endl;
+  wcout << "bufferSize: " << bufferSize << std::endl;
+  wcout << "REACTIVE_FIXED_BUFFER_MODE: " << REACTIVE_FIXED_BUFFER_MODE << std::endl;
+  wcout << "DELAY_MS: " << DELAY_MS << std::endl;
+  wcout << "LEARNING_MODE: " << LEARNING_MODE << std::endl;
+  wcout << "PRED_ONE_OVER: " << PRED_ONE_OVER << std::endl;
+  wcout << "FIXED_DELAY: " << FIXED_DELAY << std::endl;
+  wcout << "LEARNING_MS: " << LEARNING_MS << std::endl;
+  wcout << "TIMING: " << TIMING << std::endl;
+  wcout << "DEBUG: " << DEBUG << std::endl;
+  wcout << "NO_HARVESTING: " << NO_HARVESTING << std::endl;
+  wcout << "PRIMARY_ALONE: " << PRIMARY_ALONE << std::endl;
+  wcout << "FEEDBACK: " << FEEDBACK << std::endl;
+  wcout << "FEEDBACK_MS: " << FEEDBACK_MS << std::endl;
+  wcout << "SLEEP_MS: " << SLEEP_MS << std::endl;
+  wcout << "PRIMARY_SIZE: " << PRIMARY_SIZE << std::endl;
+  wcout << "MINROOT_MASK: " << minRootMask << std::endl;
+  wcout << "dropBadFeatures: " << dropBadFeatures << std::endl;
+  wcout << "read_cpu_sleep_us: " << read_cpu_sleep_us << std::endl;
+  wcout << "updatePrimary: " << updatePrimary << std::endl;
+  wcout << "DEBUG_PEAK: " << DEBUG_PEAK << std::endl;
+  wcout << "LOGGING: " << LOGGING << std::endl;
+
 
   wcout << "FIXED_BUFFER_MODE: " << FIXED_BUFFER_MODE << std::endl;
   wcout << "MAX_HVM_CORES: " << MAX_HVM_CORES << std::endl;
@@ -339,7 +357,6 @@ Record records[MAX_RECORDS];
 UINT64 numLogEntries = 0;
 RecordCPU recordsCPU[20000000];
 UINT64 numLogEntriesCPU = 0;
-BOOLEAN DEBUG_PEAK = 1;
 
 void writeLogs()
 {
@@ -481,6 +498,27 @@ UINT64 busyMaskCores(UINT64 busyLpMask)
 // int main(int argc, char* argv[])
 int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 {
+  cout << "HVM agent runs empty loop" << endl;
+  while (1) {}
+
+  CycleCounter timerTest;
+  timerTest.Start();
+  RUN_DURATION_SEC = 600;
+  time_t nowTest = time(0);
+  char* dtTest = ctime(&nowTest);
+  cout << "HVM agent starting: " << dtTest << endl;
+
+  //HVMAgent_SpinUS(60*1000000);
+  while (timerTest.ElapsedSeconds() < RUN_DURATION_SEC) {}
+
+  nowTest = time(0);
+  dtTest = ctime(&nowTest);
+  cout << "HVM agent finishing: " << dtTest << endl;
+  return 0;
+  
+
+
+
   verbose = FALSE;
   process_args(argc, argv);
   int sleep_us = SLEEP_MS * 1000;
@@ -492,7 +530,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
   time_t now = time(0);
   char* dt = ctime(&now);
-  cout << "HVM agent initialized: " << dt << endl;
+  //cout << "HVM agent initialized: " << dt << endl;
 
   /************************/
   // set up latency measurements
@@ -588,7 +626,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   cout << "HVM agent starting: " << dt << endl;
 
   while (timer.ElapsedSeconds() < RUN_DURATION_SEC)
-  {
+  { 
     debug_count++;
     if (DEBUG && debug_count > 6)
       break;
@@ -601,16 +639,17 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       while (true)
       {
         HVMAgent_SpinUS(read_cpu_sleep_us);
-
+        
         systemBusyMaskRaw = HVMAgent_BusyMaskRaw();
         systemBusyMask = busyMaskCores(systemBusyMaskRaw);
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
         primaryBusyCores = primary.busyCores(systemBusyMask);
         primaryCores = primary.curCores;
-
+        
         if (primaryBusyCores > max)
           max = primaryBusyCores;
+        
         if (DEBUG_PEAK)
         {
           recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores};
@@ -623,10 +662,14 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           break;  // log max from every 2ms
       }
 
-      records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(),
-          0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
-      ASSERT(numLogEntries < MAX_RECORDS);
+      if (LOGGING)
+      {
+        records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+            primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
+            bitset<64>(systemBusyMaskRaw).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
+        ASSERT(numLogEntries < MAX_RECORDS);
+      }
+      
     }
 
     else if (FIXED_BUFFER_MODE)
