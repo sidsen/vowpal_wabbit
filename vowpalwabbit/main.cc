@@ -30,6 +30,7 @@ license as described in the file LICENSE.
 #include <string>
 
 #include "hvmagent_api.h"
+//#include "helper.h"
 
 #include <bitset>
 #include "vw.h"
@@ -63,6 +64,14 @@ using namespace VW::config;
 #define MAX_HVM_CORES 24  // 12
 #define MIN_HVM_CORES 1   // 6
 
+enum LearningAlgo
+{
+  CSOAA,
+  REG,
+  CBANDIT
+};
+
+
 /* process args */
 const WCHAR ARG_CSV[] = L"--csv";
 const WCHAR ARG_DURATION[] = L"--duration_sec";
@@ -70,6 +79,10 @@ const WCHAR ARG_BUFFER[] = L"--buffer";
 const WCHAR ARG_DELAY_MS[] = L"--delay_ms";
 const WCHAR ARG_REACTIVE_FIXED_BUFFER_MODE[] = L"--reactive_buffer_mode";
 const WCHAR ARG_LEARNING_MODE[] = L"--learning_mode";
+const WCHAR ARG_LEARNING_ALGO[] = L"--learning_algo";
+const WCHAR ARG_LEARNING_ALGO_CSOAA[] = L"csoaa";
+const WCHAR ARG_LEARNING_ALGO_REG[] = L"reg";
+const WCHAR ARG_LEARNING_ALGO_CB[] = L"cb";
 const WCHAR ARG_LEARNING_PRED_ONE_OVER[] = L"--pred_one_over";
 const WCHAR ARG_FIXED_DELAY[] = L"--fixed_delay";
 const WCHAR ARG_LEARNING_MS[] = L"--learning_ms";
@@ -101,7 +114,10 @@ int bufferSize = -1;
 int FIXED_BUFFER_MODE = 0;
 int REACTIVE_FIXED_BUFFER_MODE = 0;
 int DELAY_MS = 0;
+int LEARNING = 0;
 int LEARNING_MODE = 0;
+LearningAlgo LEARNING_ALGO = CSOAA; //use CSOAA as the learning algo by default
+
 // 1: fixed rate learning without safeguard
 // 2: fixed rate learning with safeguard
 // 3: moving rate learning
@@ -215,6 +231,24 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
       SLEEP_MS = _wtoi(argv[1]);
       SLEEP_US = SLEEP_MS * 1000;
     }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_ALGO, ARRAY_SIZE(ARG_LEARNING_ALGO)))
+    {
+      if (0 == ::_wcsnicmp(argv[1], ARG_LEARNING_ALGO_CSOAA, ARRAY_SIZE(ARG_LEARNING_ALGO_CSOAA)))
+      {
+        LEARNING_ALGO = CSOAA;
+        wcout << "LEARNING_ALGO: CSOAA" << std::endl;
+      }
+      else if (0 == ::_wcsnicmp(argv[1], ARG_LEARNING_ALGO_REG, ARRAY_SIZE(ARG_LEARNING_ALGO_REG)))
+      {
+        LEARNING_ALGO = REG;
+        wcout << "LEARNING_ALGO: REG" << std::endl;
+      }
+      else if (0 == ::_wcsnicmp(argv[1], ARG_LEARNING_ALGO_CB, ARRAY_SIZE(ARG_LEARNING_ALGO_CB)))
+      {
+        LEARNING_ALGO = CBANDIT;
+        wcout << "LEARNING_ALGO: CBANDIT" << std::endl;
+      }
+    }
     else if (0 == ::_wcsnicmp(argv[0], ARG_MODE, ARRAY_SIZE(ARG_MODE)))
     {
       if (0 == ::_wcsnicmp(argv[1], ARG_MODE_CPUGROUPS, ARRAY_SIZE(ARG_MODE_CPUGROUPS)))
@@ -318,6 +352,7 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   wcout << "MAX_HVM_CORES: " << MAX_HVM_CORES << std::endl;
   wcout << "MIN_HVM_CORES: " << MIN_HVM_CORES << std::endl;
 }
+
 
 /* logging */
 struct Record
@@ -498,27 +533,6 @@ UINT64 busyMaskCores(UINT64 busyLpMask)
 // int main(int argc, char* argv[])
 int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 {
-  cout << "HVM agent runs empty loop" << endl;
-  while (1) {}
-
-  CycleCounter timerTest;
-  timerTest.Start();
-  RUN_DURATION_SEC = 600;
-  time_t nowTest = time(0);
-  char* dtTest = ctime(&nowTest);
-  cout << "HVM agent starting: " << dtTest << endl;
-
-  //HVMAgent_SpinUS(60*1000000);
-  while (timerTest.ElapsedSeconds() < RUN_DURATION_SEC) {}
-
-  nowTest = time(0);
-  dtTest = ctime(&nowTest);
-  cout << "HVM agent finishing: " << dtTest << endl;
-  return 0;
-  
-
-
-
   verbose = FALSE;
   process_args(argc, argv);
   int sleep_us = SLEEP_MS * 1000;
@@ -576,7 +590,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   double stddev = 0;
   double avg = 0;
   string feature;
-  int cpu_max;
+  int cpu_max_observed;
   int correct_class;
 
   int pred = 0;
@@ -589,8 +603,29 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
   int buffer_empty_consecutive_count = 0;
   // initialize vw
-  auto vw = VW::initialize("--csoaa " + to_string(primary.maxCores) + " --power_t 0 -l 0.1");
-  std::cout << "vw initialized with " << primary.maxCores << " classes." << endl;
+  // use csoaa
+  // use cb
+  vw* vw;
+  switch(LEARNING_ALGO) {
+    case CSOAA:
+      vw = VW::initialize("--csoaa " + to_string(primary.maxCores) + " --power_t 0 -l 0.1");
+      std::cout << "csoaa: vw initialized with " << primary.maxCores << " classes." << endl;
+      break;
+    case REG:
+      vw = VW::initialize(" --power_t 0 -l 0.1");
+      std::cout << "linear regression" << endl;
+      break;
+    case CBANDIT:
+      // TODO
+      /*
+      vw = VW::initialize("--cb_explore " + to_string(primary.maxCores) + " --power_t 0 -l 0.1");
+      std::cout << "cb: vw initialized with " << primary.maxCores << " classes." << endl;
+      */
+      break;
+    default:
+      cout << "EXIT: No learning algorithm specified." << endl;
+      exit(1); 
+  }
 
   string vwLabel, vwFeature, vwMsg;
   example* ex;
@@ -623,7 +658,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
   now = time(0);
   dt = ctime(&now);
-  cout << "HVM agent starting: " << dt << endl;
+  std::cout << "HVM agent starting: " << dt << endl;
 
   while (timer.ElapsedSeconds() < RUN_DURATION_SEC)
   { 
@@ -923,7 +958,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       else
         med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2;
 
-      cpu_max = max;
+      cpu_max_observed = max;
       if (LEARNING_MODE == 7)
       {
         min = 1;
@@ -1043,13 +1078,35 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             else
               correct_class = max;
 
-            for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
+            switch (LEARNING_ALGO)
             {
-              if (k < correct_class)
-                cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
-              else
-                cost = k - correct_class;  // prefect- & over-prediction
-              vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
+              case CSOAA:
+                for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
+                {
+                  if (k < correct_class)
+                    cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
+                  else
+                    cost = k - correct_class;  // prefect- & over-prediction
+                  vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
+                }
+                break;
+              case REG:
+                vwLabel = std::to_string(cpu_max_observed) + " ";
+                break;
+              case CBANDIT:
+                // TODO
+                /*
+                int k = newPrimaryCores;
+                if (k < correct_class)
+                  cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
+                else
+                  cost = k - correct_class;  // prefect- & over-prediction
+                vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
+                */
+                break;
+              default:
+                cout << "EXIT: No learning algorithm specified." << endl;
+                exit(1); 
             }
 
             /* create vw training data */
@@ -1085,7 +1142,23 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
           /* get prediction --> # cores to primary VM */
           vw->predict(*ex_pred);
-          pred = (int)VW::get_cost_sensitive_prediction(ex_pred);
+
+          switch (LEARNING_ALGO)
+          {
+            case CSOAA:
+              pred = (int)VW::get_cost_sensitive_prediction(ex_pred);
+              break;
+            case REG:
+              pred = (int)ceil(VW::get_prediction(ex_pred));
+              break;
+            case CBANDIT:
+              // TODO
+              break;
+            default:
+              cout << "EXIT: No learning algorithm specified." << endl;
+              exit(1);
+          }
+
           if (DEBUG)
             std::cout << "pred = " << pred << endl;
           VW::finish_example(*vw, *ex_pred);
@@ -1095,7 +1168,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             newPrimaryCores = std::min(std::max(pred, primaryBusyCores + 1),
                 (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
           else
-            newPrimaryCores = std::min(std::max(pred, cpu_max + 1),
+            newPrimaryCores = std::min(std::max(pred, cpu_max_observed + 1),
                 (INT32)primary.maxCores);  // keep at least 1 core in addition to max from the past window
 
           if (LEARNING_MODE == 8 || LEARNING_MODE == 10)
@@ -1141,7 +1214,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
           primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(),
-          min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max, overpredicted, safeguard, feedback_max,
+          min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, feedback_max,
           updateModel};
 
       /****** update CPU affinity ******/
