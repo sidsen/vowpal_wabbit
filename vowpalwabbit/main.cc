@@ -681,7 +681,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         HVMAgent_SpinUS(read_cpu_sleep_us);
         
-        systemBusyMaskRaw = HVMAgent_BusyMaskRaw();
+        systemBusyMaskRaw = HVMAgent_BusyMaskCores();
         systemBusyMask = busyMaskCores(systemBusyMaskRaw);
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
@@ -725,7 +725,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         HVMAgent_SpinUS(read_cpu_sleep_us);
 
-        systemBusyMaskRaw = HVMAgent_BusyMaskRaw();
+        systemBusyMaskRaw = HVMAgent_BusyMaskCores();
         systemBusyMask = busyMaskCores(systemBusyMaskRaw);
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
@@ -769,7 +769,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       start = high_resolution_clock::now();
       max = 0;  // reset max
 
-      systemBusyMaskRaw = HVMAgent_BusyMaskRaw();
+      systemBusyMaskRaw = HVMAgent_BusyMaskCores();
       systemBusyMask = busyMaskCores(systemBusyMaskRaw);
       hvmBusyCores = hvm.busyCores(systemBusyMask);
       hvmCores = hvm.curCores;
@@ -822,7 +822,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         if (TIMING)
           start = high_resolution_clock::now();
 
-        systemBusyMaskRaw = HVMAgent_BusyMaskRaw();
+        systemBusyMaskRaw = HVMAgent_BusyMaskCores();
         systemBusyMask = busyMaskCores(systemBusyMaskRaw);
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
