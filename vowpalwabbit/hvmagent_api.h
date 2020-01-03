@@ -70,6 +70,7 @@ extern "C" CPU_SET HVMAgent_GenerateCoreAffinityFromFront(UINT32 cores);
 
 extern "C" CPU_SET HVMAgent_BusyMaskRaw();
 extern "C" CPU_SET HVMAgent_BusyMaskCores();
+extern "C" CPU_SET HVMAgent_BusyMaskCoresNonSMTVMs();
 extern "C" UINT32 HVMAgent_CoreCount(CPU_SET mask);
 extern "C" HRESULT HVMAgent_SpinUS(UINT64 delayUS);
 
@@ -142,9 +143,6 @@ struct VMInfo
             if (mode == CPUGROUPS)
             {
                 CHECK_CALL(HVMAgent_AssignCpuGroupToVM(handle, groups[curCores]), "Failed to assign CpuGroup to VM");
-                OLECHAR *guidString;
-                StringFromCLSID(groups[curCores], &guidString);
-                std::wcout << L"Assigning CpuGroup " << guidString << " to VM " << vmName << std::endl;
             }
             else if (mode == IPI || mode == IPI_HOLES)
             {
@@ -170,7 +168,7 @@ struct VMInfo
             {
                 masks[i] = HVMAgent_GenerateCoreAffinityFromBack(i);
             }
-            std::wcout << L"Mask " << i << L": " << std::hex << masks[i] << L" " <<std::dec << masks[i] << std::endl;
+            std::wcout << L"Mask " << i << L": " << std::hex << masks[i] << std::dec << std::endl;
         }
 
         curCoreMask = masks[curCores];

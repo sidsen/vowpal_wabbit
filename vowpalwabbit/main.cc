@@ -103,6 +103,7 @@ const WCHAR ARG_MINROOT_MASK[] = L"--minroot_mask";
 const WCHAR ARG_DROP_BAD_FEATURES[] = L"--drop_bad_features";
 const WCHAR ARG_READ_CPU_SLEEP_US[] = L"--read_cpu_sleep_us";
 const WCHAR ARG_PRIMARY_NAMES[] = L"--primary_names";
+const WCHAR ARG_HVM_NAMES[] = L"--hvm_names";
 const WCHAR ARG_UPDATE_PRIMARY[] = L"--update_primary";
 const WCHAR ARG_DEBUG_PEAK[] = L"--debug_peak";
 const WCHAR ARG_LOGGING[] = L"--logging";
@@ -146,7 +147,7 @@ Mode mode;
 BOOL disjointCpuGroups = FALSE;
 UINT64 minRootMask = 0;
 std::wstring primaryNames = L"LatSensitive";  // L"LatSensitive-0,LatSensitive-1";
-std::wstring secondaryName = L"CPUBully";
+std::wstring hvmNames = L"CPUBully";
 CpuInfo cpuInfo;
 
 #ifndef ARRAY_SIZE
@@ -167,6 +168,10 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     else if (0 == ::_wcsnicmp(argv[0], ARG_PRIMARY_NAMES, ARRAY_SIZE(ARG_PRIMARY_NAMES)))
     {
       primaryNames = argv[1];
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_HVM_NAMES, ARRAY_SIZE(ARG_HVM_NAMES)))
+    {
+      hvmNames = argv[1];
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_DURATION, ARRAY_SIZE(ARG_DURATION)))
     {
@@ -324,6 +329,7 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
 
   wcout << "output_csv: " << output_csv << std::endl;
   wcout << "primaryNames: " << primaryNames << std::endl;
+  wcout << "hvmNames: " << hvmNames << std::endl;
   wcout << "RUN_DURATION_SEC: " << RUN_DURATION_SEC << std::endl;
   wcout << "bufferSize: " << bufferSize << std::endl;
   wcout << "REACTIVE_FIXED_BUFFER_MODE: " << REACTIVE_FIXED_BUFFER_MODE << std::endl;
@@ -505,7 +511,7 @@ void init()
   */
 
   ASSERT(SUCCEEDED(primary.init(mode, primaryNames, PRIMARY_SIZE, TRUE, disjointCpuGroups)));
-  ASSERT(SUCCEEDED(hvm.init(mode, secondaryName, cpuInfo.NonMinRootCores - PRIMARY_SIZE, FALSE, disjointCpuGroups)));
+  ASSERT(SUCCEEDED(hvm.init(mode, hvmNames, cpuInfo.NonMinRootCores - PRIMARY_SIZE, FALSE, disjointCpuGroups)));
 
   hvm.maxCores = cpuInfo.NonMinRootCores - bufferSize;
   hvm.minCores = hvm.curCores;  // initial size of hvm
@@ -675,7 +681,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         HVMAgent_SpinUS(read_cpu_sleep_us);
         
-        systemBusyMaskRaw = HVMAgent_BusyMaskRaw();
+        systemBusyMaskRaw = HVMAgent_BusyMaskCores();
         systemBusyMask = busyMaskCores(systemBusyMaskRaw);
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
@@ -719,7 +725,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         HVMAgent_SpinUS(read_cpu_sleep_us);
 
-        systemBusyMaskRaw = HVMAgent_BusyMaskRaw();
+        systemBusyMaskRaw = HVMAgent_BusyMaskCores();
         systemBusyMask = busyMaskCores(systemBusyMaskRaw);
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
@@ -763,7 +769,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       start = high_resolution_clock::now();
       max = 0;  // reset max
 
-      systemBusyMaskRaw = HVMAgent_BusyMaskRaw();
+      systemBusyMaskRaw = HVMAgent_BusyMaskCores();
       systemBusyMask = busyMaskCores(systemBusyMaskRaw);
       hvmBusyCores = hvm.busyCores(systemBusyMask);
       hvmCores = hvm.curCores;
@@ -816,7 +822,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         if (TIMING)
           start = high_resolution_clock::now();
 
-        systemBusyMaskRaw = HVMAgent_BusyMaskRaw();
+        systemBusyMaskRaw = HVMAgent_BusyMaskCores();
         systemBusyMask = busyMaskCores(systemBusyMaskRaw);
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
