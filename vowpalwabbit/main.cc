@@ -114,7 +114,7 @@ int RUN_DURATION_SEC = 0;
 int bufferSize = -1;
 int FIXED_BUFFER_MODE = 0;
 int REACTIVE_FIXED_BUFFER_MODE = 0;
-int DELAY_MS = 0;
+float DELAY_MS = 0;
 int LEARNING = 0;
 int LEARNING_MODE = 0;
 LearningAlgo LEARNING_ALGO = CSOAA; //use CSOAA as the learning algo by default
@@ -189,7 +189,7 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
 
     else if (0 == ::_wcsnicmp(argv[0], ARG_DELAY_MS, ARRAY_SIZE(ARG_DELAY_MS)))
     {
-      DELAY_MS = _wtoi(argv[1]);
+      DELAY_MS = _wtof(argv[1]);
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_MODE, ARRAY_SIZE(ARG_LEARNING_MODE)))
     {
@@ -551,7 +551,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   // auto time_data_collection, time_feature_computation, time_model_udpate, time_model_inference, time_cpugroup_update;
 
   int delay_us;
-  delay_us = DELAY_MS * 1000;
+  delay_us = (int) (DELAY_MS * 1000);
 
   /************************/
   // VW learning agent
