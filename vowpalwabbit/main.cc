@@ -71,7 +71,6 @@ enum LearningAlgo
   CBANDIT
 };
 
-
 /* process args */
 const WCHAR ARG_CSV[] = L"--csv";
 const WCHAR ARG_DURATION[] = L"--duration_sec";
@@ -108,7 +107,6 @@ const WCHAR ARG_UPDATE_PRIMARY[] = L"--update_primary";
 const WCHAR ARG_DEBUG_PEAK[] = L"--debug_peak";
 const WCHAR ARG_LOGGING[] = L"--logging";
 
-
 std::wstring output_csv = L"";
 int RUN_DURATION_SEC = 0;
 int bufferSize = -1;
@@ -117,7 +115,7 @@ int REACTIVE_FIXED_BUFFER_MODE = 0;
 int DELAY_MS = 0;
 int LEARNING = 0;
 int LEARNING_MODE = 0;
-LearningAlgo LEARNING_ALGO = CSOAA; //use CSOAA as the learning algo by default
+LearningAlgo LEARNING_ALGO = CSOAA;  // use CSOAA as the learning algo by default
 
 // 1: fixed rate learning without safeguard
 // 2: fixed rate learning with safeguard
@@ -326,7 +324,6 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   if (LEARNING_MODE != 0 || NO_HARVESTING != 0 || REACTIVE_FIXED_BUFFER_MODE != 0)
     FIXED_BUFFER_MODE = 0;
 
-
   wcout << "output_csv: " << output_csv << std::endl;
   wcout << "primaryNames: " << primaryNames << std::endl;
   wcout << "hvmNames: " << hvmNames << std::endl;
@@ -353,12 +350,10 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   wcout << "DEBUG_PEAK: " << DEBUG_PEAK << std::endl;
   wcout << "LOGGING: " << LOGGING << std::endl;
 
-
   wcout << "FIXED_BUFFER_MODE: " << FIXED_BUFFER_MODE << std::endl;
   wcout << "MAX_HVM_CORES: " << MAX_HVM_CORES << std::endl;
   wcout << "MIN_HVM_CORES: " << MIN_HVM_CORES << std::endl;
 }
-
 
 /* logging */
 struct Record
@@ -550,7 +545,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
   time_t now = time(0);
   char* dt = ctime(&now);
-  //cout << "HVM agent initialized: " << dt << endl;
+  // cout << "HVM agent initialized: " << dt << endl;
 
   /************************/
   // set up latency measurements
@@ -612,7 +607,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   // use csoaa
   // use cb
   vw* vw;
-  switch(LEARNING_ALGO) {
+  switch (LEARNING_ALGO)
+  {
     case CSOAA:
       vw = VW::initialize("--csoaa " + to_string(primary.maxCores) + " --power_t 0 -l 0.1");
       std::cout << "csoaa: vw initialized with " << primary.maxCores << " classes." << endl;
@@ -630,7 +626,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       break;
     default:
       cout << "EXIT: No learning algorithm specified." << endl;
-      exit(1); 
+      exit(1);
   }
 
   string vwLabel, vwFeature, vwMsg;
@@ -667,7 +663,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   std::cout << "HVM agent starting: " << dt << endl;
 
   while (timer.ElapsedSeconds() < RUN_DURATION_SEC)
-  { 
+  {
     debug_count++;
     if (DEBUG && debug_count > 6)
       break;
@@ -680,17 +676,17 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       while (true)
       {
         HVMAgent_SpinUS(read_cpu_sleep_us);
-        
+
         systemBusyMaskRaw = HVMAgent_BusyMaskCores();
         systemBusyMask = busyMaskCores(systemBusyMaskRaw);
         hvmBusyCores = hvm.busyCores(systemBusyMask);
         hvmCores = hvm.curCores;
         primaryBusyCores = primary.busyCores(systemBusyMask);
         primaryCores = primary.curCores;
-        
+
         if (primaryBusyCores > max)
           max = primaryBusyCores;
-        
+
         if (DEBUG_PEAK)
         {
           recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores};
@@ -710,7 +706,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             bitset<64>(systemBusyMaskRaw).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
         ASSERT(numLogEntries < MAX_RECORDS);
       }
-      
     }
 
     else if (FIXED_BUFFER_MODE)
@@ -743,10 +738,13 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
       newPrimaryCores = std::min(primaryBusyCores + bufferSize, (INT32)primary.maxCores);  // re-compute primary size
 
-      records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(),
-          0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
-      ASSERT(numLogEntries < MAX_RECORDS);
+      if (LOGGING)
+      {
+        records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+            primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
+            bitset<64>(systemBusyMaskRaw).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
+        ASSERT(numLogEntries < MAX_RECORDS);
+      }
 
       if (newPrimaryCores != primary.curCores)
       {
@@ -829,13 +827,11 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         primaryBusyCores = primary.busyCores(systemBusyMask);
         primaryCores = primary.curCores;
 
-
         if (DEBUG_PEAK)
         {
           recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores};
           ASSERT(numLogEntries < MAX_RECORDS);
         }
-
 
         if (TIMING)
         {
@@ -1112,7 +1108,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                 break;
               default:
                 cout << "EXIT: No learning algorithm specified." << endl;
-                exit(1); 
+                exit(1);
             }
 
             /* create vw training data */
@@ -1218,10 +1214,14 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
       }
 
-      records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+      if (LOGGING)
+      {
+        records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
           primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(),
           min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, feedback_max,
           updateModel};
+        ASSERT(numLogEntries < MAX_RECORDS);
+      }
 
       /****** update CPU affinity ******/
       if (newPrimaryCores != primary.curCores)
@@ -1240,7 +1240,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           HVMAgent_SpinUS(sleep_us);
       }
 
-      ASSERT(numLogEntries < MAX_RECORDS);
 
       // prevSafeguard = safeguard; //only workds for mode 2-4
       prevOverpredicted = overpredicted;  // works for all modes
