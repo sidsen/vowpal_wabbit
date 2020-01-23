@@ -106,6 +106,9 @@ const WCHAR ARG_HVM_NAMES[] = L"--hvm_names";
 const WCHAR ARG_UPDATE_PRIMARY[] = L"--update_primary";
 const WCHAR ARG_DEBUG_PEAK[] = L"--debug_peak";
 const WCHAR ARG_LOGGING[] = L"--logging";
+const WCHAR ARG_COST_FUNCTION[] = L"--cost_function";
+const WCHAR ARG_PRED_PLUS_ONE[] = L"--pred_plus_one";
+const WCHAR ARG_NO_PRED[] = L"--no_pred";
 
 std::wstring output_csv = L"";
 int RUN_DURATION_SEC = 0;
@@ -128,6 +131,7 @@ int DEBUG = 0;        // print debug messages
 int NO_HARVESTING = 0;
 int PRIMARY_ALONE = 0;
 int PRIMARY_SIZE = 0;
+int cost_function = 0;
 
 int FEEDBACK_MS = 0;
 int FEEDBACK = 0;
@@ -140,6 +144,8 @@ int read_cpu_sleep_us = 0;
 int updatePrimary = 1;
 int DEBUG_PEAK = 1;
 int LOGGING = 1;
+int PRED_PLUS_ONE = 0;
+int NO_PRED = 0;
 
 Mode mode;
 BOOL disjointCpuGroups = FALSE;
@@ -309,6 +315,18 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     {
       LOGGING = _wtoi(argv[1]);
     }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_COST_FUNCTION, ARRAY_SIZE(ARG_COST_FUNCTION)))
+    {
+      cost_function = _wtoi(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_PRED_PLUS_ONE, ARRAY_SIZE(ARG_PRED_PLUS_ONE)))
+    {
+      PRED_PLUS_ONE = _wtoi(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_NO_PRED, ARRAY_SIZE(ARG_NO_PRED)))
+    {
+      NO_PRED = _wtoi(argv[1]);
+    }
     else
     {
       wprintf(L"Unknown argument: %s\n", argv[0]);
@@ -349,6 +367,9 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   wcout << "updatePrimary: " << updatePrimary << std::endl;
   wcout << "DEBUG_PEAK: " << DEBUG_PEAK << std::endl;
   wcout << "LOGGING: " << LOGGING << std::endl;
+  wcout << "cost_function: " << cost_function << std::endl;
+  wcout << "PRED_PLUS_ONE: " << PRED_PLUS_ONE << std::endl;
+  wcout << "NO_PRED: " << NO_PRED << std::endl;
 
   wcout << "FIXED_BUFFER_MODE: " << FIXED_BUFFER_MODE << std::endl;
   wcout << "MAX_HVM_CORES: " << MAX_HVM_CORES << std::endl;
@@ -638,7 +659,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   /************************/
   int use_curr_busy = 1;
   std::cout << "************************" << endl;
-  std::cout << "always update learning model" << endl;
+  std::cout << "DO NOT always (optional) update learning model (cost_function eval)" << endl;
+  std::cout << "drop data for reg" << endl;
   std::cout << "update under-predictions with (correct_label = observed_peak+1)" << endl;
   if (use_curr_busy)
     std::cout << "use current busy" << endl;
@@ -852,14 +874,14 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           feedback_max = primaryBusyCores;
 
         // check for underprediction (buffer empty)
-        if (LEARNING_MODE == 3 || LEARNING_MODE == 4)
+        if (LEARNING_MODE == 3 || LEARNING_MODE == 4 || LEARNING_MODE == 45)
         {
           if (primaryBusyCores == primary.curCores && primary.curCores != primary.maxCores)
           {
             // buffer runs out (underprediction) --> trigger immediate safeguard
             overpredicted = 0;
             safeguard = 1;
-            if (LEARNING_MODE == 4)
+            if (LEARNING_MODE == 4 || LEARNING_MODE == 45)
               break;  // stop data collection immediately for mode 4
 
             // give all cores back to primary for mode3
@@ -1059,7 +1081,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         if (DEBUG)
           cout << "invoke_learning: " << invoke_learning << " safeguard:" << safeguard << endl;
 
-        invoke_learning = 1;
+        if (PRED_ONE_OVER)
+          invoke_learning = 1;
         if (invoke_learning)
         {  // use model prediction for next window only if overpredicted from the previous window
           // if (dropBadFeatures && prevSafeguard)
@@ -1075,21 +1098,64 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             /* create cost label */
             vwLabel.clear();
 
-            if (safeguard || PRED_ONE_OVER || ((LEARNING_MODE == 1 && !overpredicted)))
+            // if (safeguard || PRED_ONE_OVER || ((LEARNING_MODE == 1 && !overpredicted)))
+            if (!overpredicted)
               correct_class = std::min(max + 1, (INT32)primary.maxCores);
             else
               correct_class = max;
 
+            // if (!overpredicted)
+            //  updateModel = 0;
+            correct_class = max;
             switch (LEARNING_ALGO)
             {
               case CSOAA:
-                for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
+                if (cost_function == 0)
                 {
-                  if (k < correct_class)
-                    cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
-                  else
-                    cost = k - correct_class;  // prefect- & over-prediction
-                  vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
+                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
+                  {
+                    if (k < correct_class)
+                      cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
+                    else
+                      cost = k - correct_class;  // prefect- & over-prediction
+                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
+                  }
+                }
+
+                if (cost_function == 1)
+                {
+                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
+                  {
+                    if (k < correct_class)
+                      cost = correct_class - k;  // underprediction (worse --> higher cost)
+                    else
+                      cost = k - correct_class;  // prefect- & over-prediction
+                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
+                  }
+                }
+
+                if (cost_function == 2)
+                {
+                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
+                  {
+                    if (k < correct_class)
+                      cost = correct_class - k;  // underprediction (worse --> higher cost)
+                    else
+                      cost = 0;  // prefect- & over-prediction
+                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
+                  }
+                }
+
+                if (cost_function == 3)
+                {
+                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
+                  {
+                    if (k < correct_class)
+                      cost = correct_class - k + 21;  // underprediction (worse --> higher cost)
+                    else
+                      cost = k - correct_class;  // prefect- & over-prediction
+                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
+                  }
                 }
                 break;
               case REG:
@@ -1121,8 +1187,11 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             // med:0");
 
             /* udpate vw model */
-            vw->learn(*ex);
-            VW::finish_example(*vw, *ex);
+            if (updateModel)
+            {
+              vw->learn(*ex);
+              VW::finish_example(*vw, *ex);
+            }
           }
           if (TIMING)
           {
@@ -1166,12 +1235,32 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           VW::finish_example(*vw, *ex_pred);
 
           // read current busy status?
-          if (use_curr_busy)
-            newPrimaryCores = std::min(std::max(pred, primaryBusyCores + 1),
-                (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
+          if (PRED_PLUS_ONE)
+          {
+            if (use_curr_busy)
+            {
+              newPrimaryCores = std::min(std::max(pred+1, primaryBusyCores + 1),
+                  (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
+            }
+            else
+            {
+              newPrimaryCores = std::min(std::max(pred+1, cpu_max_observed + 1),
+                  (INT32)primary.maxCores);  // keep at least 1 core in addition to max from the past window
+            }
+          }
           else
-            newPrimaryCores = std::min(std::max(pred, cpu_max_observed + 1),
-                (INT32)primary.maxCores);  // keep at least 1 core in addition to max from the past window
+          {
+            if (use_curr_busy)
+            {
+              newPrimaryCores = std::min(std::max(pred, primaryBusyCores + 1),
+                  (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
+            }
+            else
+            {
+              newPrimaryCores = std::min(std::max(pred, cpu_max_observed + 1),
+                  (INT32)primary.maxCores);  // keep at least 1 core in addition to max from the past window
+            }
+          }
 
           if (LEARNING_MODE == 8 || LEARNING_MODE == 10)
           {
@@ -1204,7 +1293,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             std::cout << "UNDER-PREDICTION" << endl;
           newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
 
-          if (LEARNING_MODE == 5)
+          if (LEARNING_MODE == 5 || LEARNING_MODE == 45)
           {
             // mode 5 uses less aggressive safeguard
             newPrimaryCores = std::min(primary.maxCores, primary.curCores * 2);
@@ -1214,12 +1303,15 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
       }
 
+      if (NO_PRED)
+        newPrimaryCores = primary.maxCores;
+
       if (LOGGING)
       {
         records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMaskRaw).to_string(),
-          min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, feedback_max,
-          updateModel};
+            primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
+            bitset<64>(systemBusyMaskRaw).to_string(), min, max, avg, stddev, med, pred, newPrimaryCores,
+            cpu_max_observed, overpredicted, safeguard, feedback_max, updateModel};
         ASSERT(numLogEntries < MAX_RECORDS);
       }
 
@@ -1239,7 +1331,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         if (FIXED_DELAY)
           HVMAgent_SpinUS(sleep_us);
       }
-
 
       // prevSafeguard = safeguard; //only workds for mode 2-4
       prevOverpredicted = overpredicted;  // works for all modes
