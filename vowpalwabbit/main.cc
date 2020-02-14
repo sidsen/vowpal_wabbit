@@ -109,6 +109,8 @@ const WCHAR ARG_LOGGING[] = L"--logging";
 const WCHAR ARG_COST_FUNCTION[] = L"--cost_function";
 const WCHAR ARG_NO_PRED[] = L"--no_pred";
 const WCHAR ARG_PRED_PLUS_ONE[] = L"--pred_plus_one";
+const WCHAR ARG_PRED_PLUS_OFFSET[] = L"--pred_plus_offset";
+const WCHAR ARG_LEARNING_RATE[] = L"--learning_rate";
 
 std::wstring output_csv = L"";
 int RUN_DURATION_SEC = 0;
@@ -120,6 +122,7 @@ int LEARNING = 0;
 int LEARNING_MODE = 0;
 LearningAlgo LEARNING_ALGO = CSOAA;  // use CSOAA as the learning algo by default
 int COST_FUNCTION = 0;
+float LEARNING_RATE = 0.1;
 
 // 1: fixed rate learning without safeguard
 // 2: fixed rate learning with safeguard
@@ -146,7 +149,8 @@ int DEBUG_PEAK = 1;
 int LOGGING = 1;
 int NO_PRED = 0;
 int PRED_PLUS_ONE = 0;
-
+int PRED_PLUS_OFFSET = 1;
+int FLAT_USAGE = 0;
 Mode mode;
 BOOL disjointCpuGroups = FALSE;
 UINT64 minRootMask = 0;
@@ -327,6 +331,14 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     {
       PRED_PLUS_ONE = _wtoi(argv[1]);
     }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_PRED_PLUS_OFFSET, ARRAY_SIZE(ARG_PRED_PLUS_OFFSET)))
+    {
+      PRED_PLUS_OFFSET = _wtoi(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_RATE, ARRAY_SIZE(ARG_LEARNING_RATE)))
+    {
+      LEARNING_RATE = _wtof(argv[1]);
+    }
     else
     {
       wprintf(L"Unknown argument: %s\n", argv[0]);
@@ -370,6 +382,8 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   wcout << "COST_FUNCTION: " << COST_FUNCTION << std::endl;
   wcout << "NO_PRED: " << NO_PRED << std::endl;
   wcout << "PRED_PLUS_ONE: " << PRED_PLUS_ONE << std::endl;
+  wcout << "PRED_PLUS_OFFSET: " << PRED_PLUS_OFFSET << std::endl;
+  wcout << "LEARNING_RATE: " << LEARNING_RATE << std::endl;
 
   wcout << "FIXED_BUFFER_MODE: " << FIXED_BUFFER_MODE << std::endl;
   wcout << "MAX_HVM_CORES: " << MAX_HVM_CORES << std::endl;
@@ -391,7 +405,7 @@ struct Record
   int max;
   double avg;
   double stddev;
-  int64_t med;
+  double med;
   int pred;
   int newPrimaryCores;
   int cpu_max;
@@ -435,12 +449,12 @@ void writeLogs()
     {
       Record r = records[i];
       if (DEBUG_PEAK)
-        fprintf(output_fp, "%d,%.6lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lld,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount,
+        fprintf(output_fp, "%d,%.6lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount,
             r.time, r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(),
             r.systemBusyMask.c_str(), r.min, r.max, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max,
             r.overpredicted, r.safeguard, r.feedback_max, r.updateModel);
       else
-        fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lld,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount,
+        fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount,
             r.time, r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(),
             r.systemBusyMask.c_str(), r.min, r.max, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max,
             r.overpredicted, r.safeguard, r.feedback_max, r.updateModel);
@@ -592,7 +606,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   int max = 0;
   int feedback_max = 0;
   int min = primary.maxCores;
-  int64_t med = 0;
+  double med = 0;
   double stddev = 0;
   double avg = 0;
   string feature;
@@ -616,7 +630,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   switch (LEARNING_ALGO)
   {
     case CSOAA:
-      vw = VW::initialize("--csoaa " + to_string(primary.maxCores) + " --power_t 0 -l 0.1");
+      vw = VW::initialize("--csoaa " + to_string(primary.maxCores) + " --power_t 0 -l " + to_string(LEARNING_RATE));
       std::cout << "csoaa: vw initialized with " << primary.maxCores << " classes." << endl;
       break;
     case REG:
@@ -655,6 +669,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   /************************/
   // main loop
   /************************/
+  int newPrimaryCoresPrev = 0;
+
   int debug_count = 0;
   auto start_1min = high_resolution_clock::now();
 
@@ -955,7 +971,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       if (size % 2 != 0)
         med = cpu_busy_a[size / 2];
       else
-        med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2;
+        med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2.0;
 
       cpu_max_observed = max;
       if (LEARNING_MODE == 7)
@@ -965,6 +981,14 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         avg = 1;
         stddev = 1;
         med = 1;
+      }
+      if (FLAT_USAGE)
+      {
+        min = 3;
+        max = 3;
+        avg = 3;
+        stddev = 0;
+        med = 3;
       }
 
       if (TIMING)
@@ -986,6 +1010,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         first_window = 0;
 
         newPrimaryCores = primary.maxCores;
+        newPrimaryCoresPrev = newPrimaryCores;
         /* construct features for model update */
         vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
             " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
@@ -1086,7 +1111,11 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             else
               correct_class = max;
             */
-            correct_class = max;
+            //correct_class = max;
+            cpu_max_observed = max;
+            correct_class = cpu_max_observed;
+            //if (NO_PRED && LEARNING_MODE == 5)
+            //  correct_class = std::min(max, newPrimaryCores);
 
             switch (LEARNING_ALGO)
             {
@@ -1102,7 +1131,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                     vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
                   }
                 }
-                if (COST_FUNCTION == 1)
+                if (COST_FUNCTION == 1) //symmetric cost
                 {
                   for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
                   {
@@ -1113,7 +1142,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                     vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
                   }
                 }
-                if (COST_FUNCTION == 2)
+                if (COST_FUNCTION == 2) //hedge cost
                 {
                   for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
                   {
@@ -1124,7 +1153,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                     vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
                   }
                 }
-                if (COST_FUNCTION == 3)
+                if (COST_FUNCTION == 3) //max + 1 
                 {
                   correct_class = std::min(max + 1, (INT32)primary.maxCores);
                   for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
@@ -1152,8 +1181,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                 */
                 break;
               default:
-                cout << "EXIT: No learning algorithm specified." << endl;
-                exit(1);
+                std::cout << "EXIT: No learning algorithm specified." << endl;
+                std::exit(1);
             }
 
             /* create vw training data */
@@ -1202,8 +1231,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               // TODO
               break;
             default:
-              cout << "EXIT: No learning algorithm specified." << endl;
-              exit(1);
+              std::cout << "EXIT: No learning algorithm specified." << endl;
+              std::exit(1);
           }
 
           if (DEBUG)
@@ -1219,7 +1248,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                 (INT32)primary.maxCores);  // keep at least 1 core in addition to max from the past window
 
           if (PRED_PLUS_ONE)
-            newPrimaryCores = std::min(std::max(pred+1, primaryBusyCores + 1),
+            newPrimaryCores = std::min(std::max(pred + PRED_PLUS_OFFSET, primaryBusyCores + 1),
                 (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
 
           if (LEARNING_MODE == 8 || LEARNING_MODE == 10)
@@ -1259,15 +1288,12 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             newPrimaryCores = std::min(primary.maxCores, primary.curCores * 2);
           }
 
+          if (NO_PRED && LEARNING_MODE == 5)
+            newPrimaryCores = std::min((INT32)primary.maxCores, newPrimaryCoresPrev * 2);
           // safeguard = 1;
         }
       }
 
-      if (NO_PRED)
-      {
-        pred_alloc = newPrimaryCores;
-        newPrimaryCores = primary.maxCores;
-      }
 
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
           primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
@@ -1275,21 +1301,36 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           updateModel};
 
       /****** update CPU affinity ******/
-      if (newPrimaryCores != primary.curCores)
+      if (NO_PRED)
       {
-        if (DEBUG)
-          cout << "<debug> newPrimaryCores = " << newPrimaryCores << endl;
-        updateCores(newPrimaryCores, systemBusyMask);
-        // printf("called update: primary.curMask=0x%x\n", primary.curMask);
-
-        HVMAgent_SpinUS(sleep_us);
-        count++;
+        pred_alloc = newPrimaryCores;
+        // newPrimaryCores = primary.maxCores;
+        if (LEARNING_MODE == 5)
+        {
+          if (newPrimaryCores != newPrimaryCoresPrev)
+            HVMAgent_SpinUS(sleep_us);
+          newPrimaryCoresPrev = newPrimaryCores;
+        }
       }
       else
       {
-        if (FIXED_DELAY)
+        if (newPrimaryCores != primary.curCores)
+        {
+          if (DEBUG)
+            std::cout << "<debug> newPrimaryCores = " << newPrimaryCores << endl;
+          updateCores(newPrimaryCores, systemBusyMask);
+          // printf("called update: primary.curMask=0x%x\n", primary.curMask);
+
           HVMAgent_SpinUS(sleep_us);
+          count++;
+        }
+        else
+        {
+          if (FIXED_DELAY)
+            HVMAgent_SpinUS(sleep_us);
+        }
       }
+
 
       ASSERT(numLogEntries < MAX_RECORDS);
 
