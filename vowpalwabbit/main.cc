@@ -139,8 +139,7 @@ int PRIMARY_SIZE = 0;
 int FEEDBACK_MS = 0;
 int FEEDBACK = 0;
 
-int SLEEP_MS = 0;
-int SLEEP_US = 0;
+float SLEEP_MS = 0;
 std::wstring MODE = L"";
 int dropBadFeatures = 0;
 int read_cpu_sleep_us = 0;
@@ -241,8 +240,7 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_SLEEP_MS, ARRAY_SIZE(ARG_SLEEP_MS)))
     {
-      SLEEP_MS = _wtoi(argv[1]);
-      SLEEP_US = SLEEP_MS * 1000;
+      SLEEP_MS = _wtof(argv[1]);
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_ALGO, ARRAY_SIZE(ARG_LEARNING_ALGO)))
     {
@@ -555,7 +553,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 {
   verbose = FALSE;
   process_args(argc, argv);
-  int sleep_us = SLEEP_MS * 1000;
+  int sleep_us = (int) SLEEP_MS * 1000;
 
   /************************/
   // initialize HVM agent
@@ -776,7 +774,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
              << "primaryCores " << primaryCores << endl;
       }
 
-      // sleep_us = SLEEP_US;
     }
 
     else if (REACTIVE_FIXED_BUFFER_MODE)
@@ -1336,7 +1333,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
       // prevSafeguard = safeguard; //only workds for mode 2-4
       prevOverpredicted = overpredicted;  // works for all modes
-      // HVMAgent_SpinUS(SLEEP_US); // sleep for 1ms for cpu affinity call (if issued) to take effect
     }
   }
 
