@@ -144,7 +144,7 @@ std::wstring MODE = L"";
 int dropBadFeatures = 0;
 int read_cpu_sleep_us = 0;
 int updatePrimary = 1;
-int DEBUG_PEAK = 1;
+int DEBUG_PEAK = 0;
 int LOGGING = 1;
 int NO_PRED = 0;
 int PRED_PLUS_ONE = 0;
@@ -416,7 +416,8 @@ struct Record
 struct RecordCPU
 {
   double time;
-  int cpuBusy;
+  int primaryBusy;
+  int primaryCores;
 };
 
 extern BOOLEAN verbose;
@@ -474,11 +475,11 @@ void writeLogs()
     FILE* output_cpu_fp = nullptr;
     output_cpu_fp = _wfopen(output_cpu_csv.c_str(), L"w+");
     ASSERT(output_cpu_fp != NULL);
-    fprintf(output_cpu_fp, "time_sec,primary_busy_cores\n");
+    fprintf(output_cpu_fp, "time_sec,primary_busy_cores,primary_cores\n");
     for (size_t i = 0; i < numLogEntriesCPU; i++)
     {
       RecordCPU r = recordsCPU[i];
-      fprintf(output_cpu_fp, "%.6lf,%d\n", r.time, r.cpuBusy);
+      fprintf(output_cpu_fp, "%.6lf,%d\n", r.time, r.primaryBusy, r.primaryCores);
     }
     fflush(output_fp);
     cout << "busy cpu logs written" << endl;
@@ -708,7 +709,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
         if (DEBUG_PEAK)
         {
-          recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores};
+          recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores, primaryCores};
           ASSERT(numLogEntries < MAX_RECORDS);
         }
 
@@ -841,7 +842,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
         if (DEBUG_PEAK)
         {
-          recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores};
+          recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores, primaryCores};
           ASSERT(numLogEntries < MAX_RECORDS);
         }
 
