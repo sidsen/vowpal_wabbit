@@ -303,17 +303,17 @@ struct CpuWaitTimeBucketCounters
     {
         QueryCounters();
         UINT64 accumulativeCount = 0;
-        std::cout << "TotalSamples " << TotalSamples << ";\t buckets: [";
+        //std::cout << "TotalSamples " << TotalSamples << ";\t buckets: [";
 
         BucketId result = Bucket6;
-
+        
         for (auto bucket : BucketIdMap)
         {
             BucketId bucketId = bucket.first;
             printf("%.2f ", (float) CounterValuesPerBucket[bucketId]);
             //std::cout << CounterValuesPerBucket[bucketId] << " ";
         }
-
+        
         for (auto bucket : BucketIdMap)
         {
             BucketId bucketId = bucket.first;
@@ -568,7 +568,15 @@ struct VMInfo
 
     BucketId GetCpuWaitTimePercentileBucketId(double percentile)
     {
-        return GetCpuWaitTimePercentileBucketId(fullVmNames[0], percentile);
+      BucketId bucketId = BucketX7;
+      for (auto fullVmName : fullVmNames)
+      {
+        BucketId bucketIdTmp = GetCpuWaitTimePercentileBucketId(fullVmName, percentile);
+        if (bucketIdTmp > bucketId)
+          bucketId = bucketIdTmp;
+      }
+      std::cout << ">>> bucket: " << BucketIdMapA[bucketId] << std::endl;
+      return bucketId;
     }
 
     UINT32 curCores;
