@@ -372,32 +372,46 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         case 17:
           bucketIdThresh = BucketX7;
+          break;
         case 16:
           bucketIdThresh = BucketX6;
+          break;
         case 15:
           bucketIdThresh = BucketX5;
+          break;
         case 14:
           bucketIdThresh = BucketX4;
+          break;
         case 13:
           bucketIdThresh = BucketX3;
+          break;
         case 12:
           bucketIdThresh = BucketX2;
+          break;
         case 11:
           bucketIdThresh = BucketX1;
+          break;
         case 0:
           bucketIdThresh = Bucket0;
+          break;
         case 1:
           bucketIdThresh = Bucket1;
+          break;
         case 2:
           bucketIdThresh = Bucket2;
+          break;
         case 3:
           bucketIdThresh = Bucket3;
+          break;
         case 4:
           bucketIdThresh = Bucket4;
+          break;
         case 5:
           bucketIdThresh = Bucket5;
+          break;
         case 6:
           bucketIdThresh = Bucket6;
+          break;
         default:
           bucketIdThresh = Bucket0;
       }        
@@ -756,6 +770,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   /************************/
   // main loop
   /************************/
+  int first_iter = 1;
   int newPrimaryCoresPrev = 0;
 
   int debug_count = 0;
@@ -798,18 +813,19 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
     {
       std::cout << timer.ElapsedUS() / 1000000.0 << " sec elapsed;\t";
       bucketId = primary.GetCpuWaitTimePercentileBucketId(99.9);
-      if (DISABLE_HARVEST)  // harvesting allowed to be disabled
+      if (DISABLE_HARVEST && !first_iter)  // harvesting allowed to be disabled
       {
         if (bucketId >= bucketIdThresh)
         {
           // wait time too long--> disable harvesting
           stop_harvest = 1;
+          if (!REENABLE_HARVEST_PERIODIC)
+            reenable_harvest_start = high_resolution_clock::now();
         }
       }
       check_dispatch_start = high_resolution_clock::now();
-      if (!REENABLE_HARVEST_PERIODIC)
-        reenable_harvest_start = high_resolution_clock::now();
     }
+    first_iter = 0;
 
     if (NO_HARVESTING)
     {
