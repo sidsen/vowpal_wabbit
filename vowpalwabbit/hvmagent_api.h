@@ -5,6 +5,7 @@
 #include <sstream>
 #include <vector>
 #include <unordered_map>
+#include <map>
 #include <cguid.h>
 #include <computedefs.h>
 #include <winnt.h>
@@ -150,7 +151,7 @@ typedef enum _BucketId
     Bucket6
 } BucketId;
 
-static std::unordered_map<BucketId, std::string> BucketIdMapA =
+static std::map<BucketId, std::string> BucketIdMapA =
 {
     {BucketX7, "X7"},
     {BucketX6, "X6"},
@@ -168,7 +169,7 @@ static std::unordered_map<BucketId, std::string> BucketIdMapA =
     {Bucket6,  "6"}
 };
 
-static std::unordered_map<BucketId, std::wstring> BucketIdMap =
+static std::map<BucketId, std::wstring> BucketIdMap =
 {
     {BucketX7, L"X7"},
     {BucketX6, L"X6"},
@@ -230,7 +231,7 @@ struct CpuWaitTimeBucketCounters
         {
             std::vector<std::wstring> perVpCounterPath;
             std::vector<HCOUNTER> perVpCounterHandles;
-            std::vector<UINT64> perVpCounterValues;
+            std::vector<double> perVpCounterValues;
 
             for (auto bucket : BucketIdMap)
             {
@@ -280,7 +281,7 @@ struct CpuWaitTimeBucketCounters
             for (size_t vp = 0; vp < NumVcpus; vp++)
             {
                 PDH_STATUS status = PdhGetFormattedCounterValue(CounterHandles[vp][bucketId],
-                                                                PDH_FMT_LARGE | PDH_FMT_NOCAP100,
+                                                                PDH_FMT_DOUBLE | PDH_FMT_NOCAP100,
                                                                 &CounterType,
                                                                 &DisplayValue);
                 if (status != ERROR_SUCCESS)
@@ -289,10 +290,10 @@ struct CpuWaitTimeBucketCounters
                     return E_FAIL;
                 }
 
-                CounterValues[vp][bucketId] = DisplayValue.largeValue;
-                CounterValuesPerBucket[bucketId] += DisplayValue.largeValue;
+                CounterValues[vp][bucketId] = DisplayValue.doubleValue;
+                CounterValuesPerBucket[bucketId] += DisplayValue.doubleValue;
 
-                TotalSamples += DisplayValue.largeValue;
+                TotalSamples += DisplayValue.doubleValue;
             }
         }
         return S_OK;
@@ -302,7 +303,16 @@ struct CpuWaitTimeBucketCounters
     {
         QueryCounters();
         UINT64 accumulativeCount = 0;
-        std::cout << "TotalSamples " << TotalSamples << std::endl;
+        std::cout << "TotalSamples " << TotalSamples << ";\t buckets: [";
+
+        BucketId result = Bucket6;
+
+        for (auto bucket : BucketIdMap)
+        {
+            BucketId bucketId = bucket.first;
+            printf("%.2f ", (float) CounterValuesPerBucket[bucketId]);
+            //std::cout << CounterValuesPerBucket[bucketId] << " ";
+        }
 
         for (auto bucket : BucketIdMap)
         {
@@ -310,16 +320,17 @@ struct CpuWaitTimeBucketCounters
 
             accumulativeCount += CounterValuesPerBucket[bucketId];
 
-            std::cout << CounterValuesPerBucket[bucketId] << " ";
+            // std::cout << CounterValuesPerBucket[bucketId] << " ";
 
             if (accumulativeCount >= TotalSamples * percent / 100.0)
             {
-                std::cout << std::endl;
-                return bucketId;
+                result = bucketId;
+                break;
             }
         }
 
-        return Bucket6;
+        std::cout << "];\t p" << percent << " bucket: " << BucketIdMapA[result] << std::endl;
+        return result;
     }
 
     HQUERY query = NULL;
@@ -328,11 +339,11 @@ struct CpuWaitTimeBucketCounters
 
     std::vector<std::vector<std::wstring>> CounterPaths;
     std::vector<std::vector<HCOUNTER>> CounterHandles;
-    std::vector<std::vector<UINT64>> CounterValues;
+    std::vector<std::vector<double>> CounterValues;
 
-    std::unordered_map<BucketId, UINT64> CounterValuesPerBucket;
+    std::map<BucketId, double> CounterValuesPerBucket;
 
-    UINT64 TotalSamples;
+    double TotalSamples;
 };
 
 struct VMInfo
@@ -566,7 +577,7 @@ struct VMInfo
     CPU_SET curCoreMask;
     std::vector<HCS_SYSTEM> handles;
     std::vector<std::wstring> fullVmNames;
-    std::unordered_map<std::wstring, CpuWaitTimeBucketCounters*> cpuWaitTimeBucketCounters;
+    std::map<std::wstring, CpuWaitTimeBucketCounters*> cpuWaitTimeBucketCounters;
 
     Mode mode;
     GUID ipiGroup;
