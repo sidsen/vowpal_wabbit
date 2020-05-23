@@ -111,6 +111,9 @@ const WCHAR ARG_NO_PRED[] = L"--no_pred";
 const WCHAR ARG_PRED_PLUS_ONE[] = L"--pred_plus_one";
 const WCHAR ARG_PRED_PLUS_OFFSET[] = L"--pred_plus_offset";
 const WCHAR ARG_LEARNING_RATE[] = L"--learning_rate";
+const WCHAR ARG_DISABLE_HARVEST[] = L"--disable_harvest";
+const WCHAR ARG_CHECK_DISPATCH_MS[] = L"--check_dispatch_ms";
+const WCHAR ARG_REENABLE_HARVEST_SEC[] = L"--reenable_harvest_sec";
 
 std::wstring output_csv = L"";
 int RUN_DURATION_SEC = 0;
@@ -127,6 +130,10 @@ float LEARNING_RATE = 0.1;
 // 1: fixed rate learning without safeguard
 // 2: fixed rate learning with safeguard
 // 3: moving rate learning
+int DISABLE_HARVEST = 0;
+int CHECK_DISPATCH_MS = 1000;   // default 1 sec
+int REENABLE_HARVEST_SEC = 10;  // default 10 sec
+
 int PRED_ONE_OVER = 0;
 int FIXED_DELAY = 0;
 int LEARNING_MS = 0;  // prediction window in ms
@@ -337,6 +344,18 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     {
       LEARNING_RATE = _wtof(argv[1]);
     }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_DISABLE_HARVEST, ARRAY_SIZE(ARG_DISABLE_HARVEST)))
+    {
+      DISABLE_HARVEST = _wtoi(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_CHECK_DISPATCH_MS, ARRAY_SIZE(ARG_CHECK_DISPATCH_MS)))
+    {
+      CHECK_DISPATCH_MS = _wtoi(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_REENABLE_HARVEST_SEC, ARRAY_SIZE(ARG_REENABLE_HARVEST_SEC)))
+    {
+      REENABLE_HARVEST_SEC = _wtoi(argv[1]);
+    }
     else
     {
       wprintf(L"Unknown argument: %s\n", argv[0]);
@@ -382,6 +401,9 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   wcout << "PRED_PLUS_ONE: " << PRED_PLUS_ONE << std::endl;
   wcout << "PRED_PLUS_OFFSET: " << PRED_PLUS_OFFSET << std::endl;
   wcout << "LEARNING_RATE: " << LEARNING_RATE << std::endl;
+  wcout << "DISABLE_HARVEST: " << DISABLE_HARVEST << std::endl;
+  wcout << "CHECK_DISPATCH_MS: " << CHECK_DISPATCH_MS << std::endl;
+  wcout << "REENABLE_HARVEST_SEC: " << REENABLE_HARVEST_SEC << std::endl;
 
   wcout << "FIXED_BUFFER_MODE: " << FIXED_BUFFER_MODE << std::endl;
   wcout << "MAX_HVM_CORES: " << MAX_HVM_CORES << std::endl;
@@ -558,7 +580,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 {
   verbose = FALSE;
   process_args(argc, argv);
-  int sleep_us = (int) SLEEP_MS * 1000;
+  int sleep_us = (int)SLEEP_MS * 1000;
 
   /************************/
   // initialize HVM agent
@@ -568,24 +590,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   time_t now = time(0);
   char* dt = ctime(&now);
   // cout << "HVM agent initialized: " << dt << endl;
-
-  /************************/
-  // set up latency measurements
-  /************************/
-  auto start = high_resolution_clock::now();
-  auto stop = high_resolution_clock::now();
-  auto learn_start = high_resolution_clock::now();
-  auto learn_stop = high_resolution_clock::now();
-  auto feedback_start = high_resolution_clock::now();
-  auto feedback_stop = high_resolution_clock::now();
-  auto check_wait_start = high_resolution_clock::now();
-  auto check_wait_stop = high_resolution_clock::now();
-  auto duration = duration_cast<microseconds>(stop - start);
-  auto us_elapsed = duration_cast<microseconds>(stop - start);
-  // auto time_data_collection, time_feature_computation, time_model_udpate, time_model_inference, time_cpugroup_update;
-
-  int delay_us;
-  delay_us = (int)(DELAY_MS * 1000);
 
   /************************/
   // VW learning agent
@@ -605,6 +609,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   int first_window = 1;
   int learning_us = LEARNING_MS * 1000;
   int feedback_us = FEEDBACK_MS * 1000;
+  int check_dispatch_us = CHECK_DISPATCH_MS * 1000;
+  int reenable_harvest_us = REENABLE_HARVEST_SEC * 1000 * 1000;
 
   int count = 0;
   int sum = 0;
@@ -672,9 +678,29 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
     std::cout << "use max from previous window" << endl;
   std::cout << "************************" << endl;
 
-  int disable_harvest = 0;
+  int stop_harvest = 0;
   int reset = 0;
-  std::cout << "harvesting can be disabled" << endl;
+  std::cout << "harvesting can be disabled (if p99.9 vcpu dispatch wait time lies in bucket >= X1)" << endl;
+
+  /************************/
+  // set up latency measurements
+  /************************/
+  auto start = high_resolution_clock::now();
+  auto stop = high_resolution_clock::now();
+  auto learn_start = high_resolution_clock::now();
+  auto learn_stop = high_resolution_clock::now();
+  auto feedback_start = high_resolution_clock::now();
+  auto feedback_stop = high_resolution_clock::now();
+  auto check_dispatch_start = high_resolution_clock::now();
+  auto check_dispatch_stop = high_resolution_clock::now();
+  auto reenable_harvest_start = high_resolution_clock::now();
+  auto reenable_harvest_stop = high_resolution_clock::now();
+  auto duration = duration_cast<microseconds>(stop - start);
+  auto us_elapsed = duration_cast<microseconds>(stop - start);
+  // auto time_data_collection, time_feature_computation, time_model_udpate, time_model_inference, time_cpugroup_update;
+
+  int delay_us;
+  delay_us = (int)(DELAY_MS * 1000);
 
   /************************/
   // main loop
@@ -699,6 +725,29 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
     debug_count++;
     if (DEBUG && debug_count > 6)
       break;
+
+    // check for vcpu wait time every check_dispatch_us
+    check_dispatch_stop = high_resolution_clock::now();
+    us_elapsed = duration_cast<microseconds>(check_dispatch_stop - check_dispatch_start);
+    if (us_elapsed.count() >= check_dispatch_us)
+    {
+      std::cout << timer.ElapsedUS() / 1000000.0 << " sec elapsed;\t";
+      bucketId = primary.GetCpuWaitTimePercentileBucketId(99.9);
+      if (DISABLE_HARVEST)  // harvesting allowed to be disabled
+      {
+        // if (bucketId == BucketX1 || bucketId == Bucket0 || bucketId == Bucket1 || bucketId == Bucket2 ||
+        //    bucketId == Bucket3 || bucketId == Bucket4 || bucketId == Bucket5 || bucketId == Bucket6)
+        if (bucketId >= BucketX1)
+        {
+          // wait time too long--> disable harvesting
+          stop_harvest = 1;
+        }
+      }
+      check_dispatch_start = high_resolution_clock::now();
+      // const std::string& bucketIdStr = BucketIdMapA[bucketId];
+      // std::cout << "time " << timer.ElapsedUS() / 1000000.0 << " bucket " << bucketIdStr.c_str() << endl;
+    }
+
 
     if (NO_HARVESTING)
     {
@@ -732,7 +781,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
       if (LOGGING)
       {
-        bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
+        //bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
         records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
             primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
             0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
@@ -769,7 +818,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
       newPrimaryCores = std::min(primaryBusyCores + bufferSize, (INT32)primary.maxCores);  // re-compute primary size
 
-      bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
+      //bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
           primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(), 0,
           0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
@@ -787,63 +836,26 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         cout << "hvmBusyCores " << hvmBusyCores << "hvmCores " << hvmCores << "primaryBusyCores " << primaryBusyCores
              << "primaryCores " << primaryCores << endl;
       }
-
     }
 
-    else if (REACTIVE_FIXED_BUFFER_MODE)
-    {
-      start = high_resolution_clock::now();
-      max = 0;  // reset max
-
-      systemBusyMask = HVMAgent_BusyMaskCoresNonSMTVMs();
-      hvmBusyCores = hvm.busyCores(systemBusyMask);
-      hvmCores = hvm.curCores;
-      primaryBusyCores = primary.busyCores(systemBusyMask);
-      primaryCores = primary.curCores;
-
-      newPrimaryCores = std::min(primaryBusyCores + bufferSize, (int)primary.maxCores);  // re-compute primary size
-
-      if (newPrimaryCores != primary.curCores)
-      {
-        bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
-        records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-            primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-            0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
-        ASSERT(numLogEntries < MAX_RECORDS);
-
-        updateCores(newPrimaryCores, systemBusyMask);
-        HVMAgent_SpinUS(sleep_us);  // sleep for 1ms for cpu affinity call (if issued) to take effects
-        count++;
-      }
-
-      if (DEBUG)
-      {
-        cout << "hvmBusyCores " << hvmBusyCores << "hvmCores " << hvmCores << "primaryBusyCores " << primaryBusyCores
-             << "primaryCores " << primaryCores << endl;
-      }
-    }
 
     else
     {
+      // reenable harvesting (if it was disabled) every reenable_harvest_us
+      if (stop_harvest)
+      {
+        reenable_harvest_stop = high_resolution_clock::now();
+        us_elapsed = duration_cast<microseconds>(reenable_harvest_stop - reenable_harvest_start);
+        if (us_elapsed.count() >= reenable_harvest_us)
+        {
+          stop_harvest = 0;
+          reset = 0;
+          reenable_harvest_start = high_resolution_clock::now();
+        }
+      }
+
       learn_start = high_resolution_clock::now();
       feedback_start = high_resolution_clock::now();
-
-      // check for wait time every second
-      check_wait_stop = high_resolution_clock::now();
-      us_elapsed = duration_cast<microseconds>(check_wait_stop - check_wait_start);
-      if (us_elapsed.count() >= 1000000)
-      {
-        bucketId = primary.GetCpuWaitTimePercentileBucketId(99.9);
-        if (bucketId == BucketX1 || bucketId == Bucket0 || bucketId == Bucket1 || bucketId == Bucket2 ||
-            bucketId == Bucket3 || bucketId == Bucket4 || bucketId == Bucket5 || bucketId == Bucket6)
-        {
-          //wait time too long--> disable harvesting
-          disable_harvest = 0;
-        }
-        check_wait_start = high_resolution_clock::now();
-        const std::string& bucketIdStr = BucketIdMapA[bucketId];
-        std::cout << "time " << timer.ElapsedUS() / 1000000.0 << " bucket " << bucketIdStr.c_str() << endl;
-      }
 
       // resetting parameters
       overpredicted = 1;
@@ -909,10 +921,11 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             // give all cores back to primary for mode3
             newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
 
-            //bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
+            // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
             records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
                 primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
+                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel,
+                bucketId};
             ASSERT(numLogEntries < MAX_RECORDS);
 
             if (newPrimaryCores != primary.curCores)
@@ -948,13 +961,14 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             newPrimaryCores = std::min(newPrimaryCores, (INT32)primary.maxCores);
             // newPrimaryCores = std::max(newPrimaryCores, pred);
 
-            //bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
+            // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
             records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
                 primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
+                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel,
+                bucketId};
             ASSERT(numLogEntries < MAX_RECORDS);
 
-            if (disable_harvest)
+            if (stop_harvest)
             {
               if (!reset)
               {
@@ -1154,10 +1168,10 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             else
               correct_class = max;
             */
-            //correct_class = max;
+            // correct_class = max;
             cpu_max_observed = max;
             correct_class = cpu_max_observed;
-            //if (NO_PRED && LEARNING_MODE == 5)
+            // if (NO_PRED && LEARNING_MODE == 5)
             //  correct_class = std::min(max, newPrimaryCores);
 
             switch (LEARNING_ALGO)
@@ -1174,7 +1188,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                     vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
                   }
                 }
-                if (COST_FUNCTION == 1) //symmetric cost
+                if (COST_FUNCTION == 1)  // symmetric cost
                 {
                   for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
                   {
@@ -1185,7 +1199,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                     vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
                   }
                 }
-                if (COST_FUNCTION == 2) //hedge cost
+                if (COST_FUNCTION == 2)  // hedge cost
                 {
                   for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
                   {
@@ -1196,7 +1210,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                     vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
                   }
                 }
-                if (COST_FUNCTION == 3) //max + 1 
+                if (COST_FUNCTION == 3)  // max + 1
                 {
                   correct_class = std::min(max + 1, (INT32)primary.maxCores);
                   for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
@@ -1337,8 +1351,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
       }
 
-
-      //bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
+      // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
           primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
           min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, feedback_max,
@@ -1358,12 +1371,15 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
       else
       {
-        if (disable_harvest)
+        if (stop_harvest)
         {
           if (!reset)
           {
-            updateCores(PRIMARY_SIZE, systemBusyMask);
-            HVMAgent_SpinUS(sleep_us);
+            if (PRIMARY_SIZE != primary.curCores)
+            {
+              updateCores(PRIMARY_SIZE, systemBusyMask);
+              HVMAgent_SpinUS(sleep_us);
+            }
             reset = 1;
           }
         }
@@ -1386,7 +1402,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           }
         }
       }
-
 
       ASSERT(numLogEntries < MAX_RECORDS);
 
