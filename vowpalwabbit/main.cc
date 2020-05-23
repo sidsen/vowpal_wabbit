@@ -113,7 +113,9 @@ const WCHAR ARG_PRED_PLUS_OFFSET[] = L"--pred_plus_offset";
 const WCHAR ARG_LEARNING_RATE[] = L"--learning_rate";
 const WCHAR ARG_DISABLE_HARVEST[] = L"--disable_harvest";
 const WCHAR ARG_CHECK_DISPATCH_MS[] = L"--check_dispatch_ms";
+const WCHAR ARG_REENABLE_HARVEST_PERIODIC[] = L"--reenable_harvest_periodic";
 const WCHAR ARG_REENABLE_HARVEST_SEC[] = L"--reenable_harvest_sec";
+const WCHAR ARG_BUCKET[] = L"--bucket";
 
 std::wstring output_csv = L"";
 int RUN_DURATION_SEC = 0;
@@ -132,7 +134,10 @@ float LEARNING_RATE = 0.1;
 // 3: moving rate learning
 int DISABLE_HARVEST = 0;
 int CHECK_DISPATCH_MS = 1000;   // default 1 sec
+int REENABLE_HARVEST_PERIODIC = 1;
 int REENABLE_HARVEST_SEC = 10;  // default 10 sec
+int BUCKET = 0;
+BucketId bucketIdThresh = Bucket0;
 
 int PRED_ONE_OVER = 0;
 int FIXED_DELAY = 0;
@@ -352,9 +357,50 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     {
       CHECK_DISPATCH_MS = _wtoi(argv[1]);
     }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_REENABLE_HARVEST_PERIODIC, ARRAY_SIZE(ARG_REENABLE_HARVEST_PERIODIC)))
+    {
+      REENABLE_HARVEST_PERIODIC = _wtoi(argv[1]);
+    }
     else if (0 == ::_wcsnicmp(argv[0], ARG_REENABLE_HARVEST_SEC, ARRAY_SIZE(ARG_REENABLE_HARVEST_SEC)))
     {
       REENABLE_HARVEST_SEC = _wtoi(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_BUCKET, ARRAY_SIZE(ARG_BUCKET)))
+    {
+      BUCKET = _wtoi(argv[1]);
+      switch (BUCKET)
+      {
+        case 17:
+          bucketIdThresh = BucketX7;
+        case 16:
+          bucketIdThresh = BucketX6;
+        case 15:
+          bucketIdThresh = BucketX5;
+        case 14:
+          bucketIdThresh = BucketX4;
+        case 13:
+          bucketIdThresh = BucketX3;
+        case 12:
+          bucketIdThresh = BucketX2;
+        case 11:
+          bucketIdThresh = BucketX1;
+        case 0:
+          bucketIdThresh = Bucket0;
+        case 1:
+          bucketIdThresh = Bucket1;
+        case 2:
+          bucketIdThresh = Bucket2;
+        case 3:
+          bucketIdThresh = Bucket3;
+        case 4:
+          bucketIdThresh = Bucket4;
+        case 5:
+          bucketIdThresh = Bucket5;
+        case 6:
+          bucketIdThresh = Bucket6;
+        default:
+          bucketIdThresh = Bucket0;
+      }        
     }
     else
     {
@@ -403,7 +449,9 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   wcout << "LEARNING_RATE: " << LEARNING_RATE << std::endl;
   wcout << "DISABLE_HARVEST: " << DISABLE_HARVEST << std::endl;
   wcout << "CHECK_DISPATCH_MS: " << CHECK_DISPATCH_MS << std::endl;
+  wcout << "REENABLE_HARVEST_PERIODIC: " << REENABLE_HARVEST_PERIODIC << std::endl;
   wcout << "REENABLE_HARVEST_SEC: " << REENABLE_HARVEST_SEC << std::endl;
+  cout << "bucketIdThresh: " << BucketIdMapA[bucketIdThresh] << std::endl;
 
   wcout << "FIXED_BUFFER_MODE: " << FIXED_BUFFER_MODE << std::endl;
   wcout << "MAX_HVM_CORES: " << MAX_HVM_CORES << std::endl;
@@ -632,7 +680,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   int safeguard = 0;
   int prevSafeguard = 0;
   int updateModel = 0;
-  BucketId bucketId;
+  BucketId bucketId = BucketX7;
 
   int buffer_empty_consecutive_count = 0;
   // initialize vw
@@ -680,7 +728,10 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
   int stop_harvest = 0;
   int reset = 0;
-  std::cout << "harvesting can be disabled (if p99.9 vcpu dispatch wait time lies in bucket >= X1)" << endl;
+  if (DISABLE_HARVEST)
+    std::cout << "harvesting can be disabled (if p99.9 vcpu dispatch wait time lies in bucket >= " << BucketIdMapA[bucketIdThresh] << ")" << endl;
+  else
+    std::cout << "harvesting cannot be disabled" << endl;
 
   /************************/
   // set up latency measurements
@@ -726,6 +777,20 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
     if (DEBUG && debug_count > 6)
       break;
 
+    // reenable harvesting (if it was disabled) every reenable_harvest_us
+    if (stop_harvest)
+    {
+      reenable_harvest_stop = high_resolution_clock::now();
+      us_elapsed = duration_cast<microseconds>(reenable_harvest_stop - reenable_harvest_start);
+      if (us_elapsed.count() >= reenable_harvest_us)
+      {
+        stop_harvest = 0;
+        reset = 0;
+        if (REENABLE_HARVEST_PERIODIC)
+          reenable_harvest_start = high_resolution_clock::now();
+      }
+    }
+
     // check for vcpu wait time every check_dispatch_us
     check_dispatch_stop = high_resolution_clock::now();
     us_elapsed = duration_cast<microseconds>(check_dispatch_stop - check_dispatch_start);
@@ -735,19 +800,16 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       bucketId = primary.GetCpuWaitTimePercentileBucketId(99.9);
       if (DISABLE_HARVEST)  // harvesting allowed to be disabled
       {
-        // if (bucketId == BucketX1 || bucketId == Bucket0 || bucketId == Bucket1 || bucketId == Bucket2 ||
-        //    bucketId == Bucket3 || bucketId == Bucket4 || bucketId == Bucket5 || bucketId == Bucket6)
-        if (bucketId >= BucketX1)
+        if (bucketId >= bucketIdThresh)
         {
           // wait time too long--> disable harvesting
           stop_harvest = 1;
         }
       }
       check_dispatch_start = high_resolution_clock::now();
-      // const std::string& bucketIdStr = BucketIdMapA[bucketId];
-      // std::cout << "time " << timer.ElapsedUS() / 1000000.0 << " bucket " << bucketIdStr.c_str() << endl;
+      if (!REENABLE_HARVEST_PERIODIC)
+        reenable_harvest_start = high_resolution_clock::now();
     }
-
 
     if (NO_HARVESTING)
     {
@@ -841,19 +903,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
     else
     {
-      // reenable harvesting (if it was disabled) every reenable_harvest_us
-      if (stop_harvest)
-      {
-        reenable_harvest_stop = high_resolution_clock::now();
-        us_elapsed = duration_cast<microseconds>(reenable_harvest_stop - reenable_harvest_start);
-        if (us_elapsed.count() >= reenable_harvest_us)
-        {
-          stop_harvest = 0;
-          reset = 0;
-          reenable_harvest_start = high_resolution_clock::now();
-        }
-      }
-
       learn_start = high_resolution_clock::now();
       feedback_start = high_resolution_clock::now();
 
