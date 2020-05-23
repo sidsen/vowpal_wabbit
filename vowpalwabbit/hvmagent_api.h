@@ -4,9 +4,18 @@
 #include <iostream>
 #include <sstream>
 #include <vector>
+#include <unordered_map>
 #include <cguid.h>
 #include <computedefs.h>
 #include <winnt.h>
+
+#include <windows.h>
+#include <stdio.h>
+#include <pdh.h>
+#include <pdhmsg.h>
+
+#pragma comment(lib, "pdh.lib")
+
 
 #define MAX_CORES 64
 
@@ -18,10 +27,18 @@
     } \
 } while(0);
 
+#define CHECK_EQ(expected, exp) do { \
+    auto result = (exp); \
+    if (expected != result) { \
+        printf("FATAL: %s:%d " #exp ": expected: 0x%lx, got: 0x%lx\n", __FILE__, __LINE__, expected, result); \
+        return E_FAIL; \
+    } \
+} while(0);
+
 #define CHECK_CALL(exp, msg) do { \
     int status = (exp); \
     if (FAILED(status)) { \
-        printf("FATAL: " msg " (error code: %d)\n", status); \
+        printf("FATAL: " msg " (error code: 0x%lx)\n", status); \
         return status; \
     } \
 } while(0);
@@ -81,7 +98,8 @@ extern "C" HRESULT HVMAgent_CreateCpuGroup(GUID *guid, CPU_SET affinity);
 extern "C" HRESULT HVMAgent_CreateCpuGroupFromFront(GUID *guid, UINT32 numCores);
 extern "C" HRESULT HVMAgent_CreateCpuGroupFromBack(GUID *guid, UINT32 numCores);
 
-extern "C" HRESULT HVMAgent_GetVMHandle(const std::wstring vmname, HCS_SYSTEM *handle);
+extern "C" HRESULT HVMAgent_GetVMHandle(const std::wstring vmname, HCS_SYSTEM *handle, std::wstring* fullVmName = NULL);
+
 extern "C" HRESULT HVMAgent_PinPrimary(const std::wstring vmname, UINT32 numCores, GUID *guid);
 
 extern "C" HRESULT HVMAgent_AssignCpuGroupToVM(HCS_SYSTEM vmHandle, GUID cpuGroup);
@@ -113,6 +131,210 @@ enum Mode
     CPUGROUPS
 };
 
+
+typedef enum _BucketId
+{
+    BucketX7,
+    BucketX6,
+    BucketX5,
+    BucketX4,
+    BucketX3,
+    BucketX2,
+    BucketX1,
+    Bucket0,
+    Bucket1,
+    Bucket2,
+    Bucket3,
+    Bucket4,
+    Bucket5,
+    Bucket6
+} BucketId;
+
+static std::unordered_map<BucketId, std::string> BucketIdMapA =
+{
+    {BucketX7, "X7"},
+    {BucketX6, "X6"},
+    {BucketX5, "X5"},
+    {BucketX4, "X4"},
+    {BucketX3, "X3"},
+    {BucketX2, "X2"},
+    {BucketX1, "X1"},
+    {Bucket0,  "0"},
+    {Bucket1,  "1"},
+    {Bucket2,  "2"},
+    {Bucket3,  "3"},
+    {Bucket4,  "4"},
+    {Bucket5,  "5"},
+    {Bucket6,  "6"}
+};
+
+static std::unordered_map<BucketId, std::wstring> BucketIdMap =
+{
+    {BucketX7, L"X7"},
+    {BucketX6, L"X6"},
+    {BucketX5, L"X5"},
+    {BucketX4, L"X4"},
+    {BucketX3, L"X3"},
+    {BucketX2, L"X2"},
+    {BucketX1, L"X1"},
+    {Bucket0,  L"0"},
+    {Bucket1,  L"1"},
+    {Bucket2,  L"2"},
+    {Bucket3,  L"3"},
+    {Bucket4,  L"4"},
+    {Bucket5,  L"5"},
+    {Bucket6,  L"6"}
+};
+
+struct CpuWaitTimeBucketCounters
+{
+    ~CpuWaitTimeBucketCounters()
+    {
+        PdhCloseQuery(query);
+    }
+
+    HRESULT ComputeNumVcpus(const std::wstring& VmName)
+    {
+        HQUERY query;
+        HCOUNTER counter;
+        DWORD CounterType;
+        PDH_FMT_COUNTERVALUE DisplayValue;
+        const std::wstring path = L"\\Hyper-V Hypervisor Partition(" + VmName + L":hvpt)\\Virtual Processors";
+
+        CHECK_EQ(ERROR_SUCCESS, PdhOpenQuery(NULL, 0, &query));
+        CHECK_EQ(ERROR_SUCCESS, PdhAddCounter(query, path.c_str(), 0, &counter));
+        CHECK_EQ(ERROR_SUCCESS, PdhCollectQueryData(query));
+
+        CHECK_EQ(ERROR_SUCCESS, PdhGetFormattedCounterValue(counter,
+                                                           PDH_FMT_LARGE | PDH_FMT_NOCAP100,
+                                                           &CounterType,
+                                                           &DisplayValue));
+
+        NumVcpus = DisplayValue.largeValue;
+
+        PdhCloseQuery(query);
+
+        return S_OK;
+    }
+
+    HRESULT init(const std::wstring& VmName)
+    {
+        PDH_STATUS status;
+        CHECK_CALL(ComputeNumVcpus(VmName), "Failed to compute num vcpus");
+
+        std::wcout << "Num vcpus: " << NumVcpus << std::endl;
+        // Open a query object.
+        CHECK(PdhOpenQuery(NULL, 0, &query) == ERROR_SUCCESS);
+
+        for (size_t vp = 0; vp < NumVcpus; vp++)
+        {
+            std::vector<std::wstring> perVpCounterPath;
+            std::vector<HCOUNTER> perVpCounterHandles;
+            std::vector<UINT64> perVpCounterValues;
+
+            for (auto bucket : BucketIdMap)
+            {
+                HCOUNTER counter;
+                const std::wstring prefix = L"\\Hyper-V Hypervisor Virtual Processor(";
+
+                std::wstring path = 
+                    prefix + VmName + L":hv vp " + std::to_wstring(vp)
+                    + L")\\CPU Wait Time Bucket " + bucket.second;
+
+                status = PdhAddCounter(query, path.c_str(), 0, &counter);
+                if (status != ERROR_SUCCESS)
+                {
+                    std::wcout << "Error adding counter " << path << ": 0x" << std::hex << status << std::endl;
+                    return E_FAIL;
+                }
+
+                perVpCounterPath.push_back(path);
+                perVpCounterHandles.push_back(counter);
+                perVpCounterValues.push_back(0);
+            }
+
+            CounterPaths.push_back(perVpCounterPath);
+            CounterHandles.push_back(perVpCounterHandles);
+            CounterValues.push_back(perVpCounterValues);
+        }
+
+        CHECK(PdhCollectQueryData(query) == ERROR_SUCCESS);
+
+        return S_OK;
+    }
+        
+    HRESULT QueryCounters()
+    {
+        DWORD CounterType;
+        PDH_FMT_COUNTERVALUE DisplayValue;
+
+        CHECK_EQ(ERROR_SUCCESS, PdhCollectQueryData(query));
+
+        TotalSamples = 0;
+
+        for (auto bucket : BucketIdMap)
+        {
+            BucketId bucketId = bucket.first;
+            CounterValuesPerBucket[bucket.first] = 0;
+
+            for (size_t vp = 0; vp < NumVcpus; vp++)
+            {
+                PDH_STATUS status = PdhGetFormattedCounterValue(CounterHandles[vp][bucketId],
+                                                                PDH_FMT_LARGE | PDH_FMT_NOCAP100,
+                                                                &CounterType,
+                                                                &DisplayValue);
+                if (status != ERROR_SUCCESS)
+                {
+                    std::wcout << "Error quering counter '" << CounterPaths[vp][bucketId] << "': 0x" << std::hex << status << std::endl;
+                    return E_FAIL;
+                }
+
+                CounterValues[vp][bucketId] = DisplayValue.largeValue;
+                CounterValuesPerBucket[bucketId] += DisplayValue.largeValue;
+
+                TotalSamples += DisplayValue.largeValue;
+            }
+        }
+        return S_OK;
+    }
+
+    BucketId GetPercentile(double percent)
+    {
+        QueryCounters();
+        UINT64 accumulativeCount = 0;
+        std::cout << "TotalSamples " << TotalSamples << std::endl;
+
+        for (auto bucket : BucketIdMap)
+        {
+            BucketId bucketId = bucket.first;
+
+            accumulativeCount += CounterValuesPerBucket[bucketId];
+
+            std::cout << CounterValuesPerBucket[bucketId] << " ";
+
+            if (accumulativeCount >= TotalSamples * percent / 100.0)
+            {
+                std::cout << std::endl;
+                return bucketId;
+            }
+        }
+
+        return Bucket6;
+    }
+
+    HQUERY query = NULL;
+    PDH_STATUS pdhStatus;
+    UINT64 NumVcpus;
+
+    std::vector<std::vector<std::wstring>> CounterPaths;
+    std::vector<std::vector<HCOUNTER>> CounterHandles;
+    std::vector<std::vector<UINT64>> CounterValues;
+
+    std::unordered_map<BucketId, UINT64> CounterValuesPerBucket;
+
+    UINT64 TotalSamples;
+};
+
 struct VMInfo
 {
     HRESULT init(Mode _mode, std::wstring _vmName, INT32 _numCores, BOOLEAN _primary = FALSE, BOOLEAN _disjointCpuGroups = FALSE)
@@ -133,9 +355,15 @@ struct VMInfo
         {
             std::wcout << L"Initializing handle for: " << vmName << L"with _numcore:" << _numCores << std::endl;
             HCS_SYSTEM handle;
-            CHECK_CALL(HVMAgent_GetVMHandle(vmName, &handle), "Failed to get VM handle");
+            std::wstring fullVmName;
+            CHECK_CALL(HVMAgent_GetVMHandle(vmName, &handle, &fullVmName), "Failed to get VM handle");
 
             handles.push_back(handle);
+            fullVmNames.push_back(fullVmName);
+
+            CpuWaitTimeBucketCounters *counters = new CpuWaitTimeBucketCounters();
+            CHECK_CALL(counters->init(fullVmName), "Failed to initialize counters");
+            cpuWaitTimeBucketCounters[fullVmName] = counters;
 
             CHECK_CALL(HVMAgent_AssignCpuGroupToVM(handle, GUID_NULL), "Failed to unbind CpuGroup from VM");
 
@@ -250,7 +478,13 @@ struct VMInfo
 
         curCoreMask &= ~result;
 
-        CHECK_CALL(HVMAgent_UpdateHVMCoresUsingMask(ipiGroup, curCoreMask), "");
+        HRESULT Result = HVMAgent_UpdateHVMCoresUsingMask(ipiGroup, curCoreMask);
+        if (FAILED(Result))
+        {
+            wprintf(L"Error extracting cores; new curCoreMask: 0x%lx output Mask: 0x%lx: 0x%lx\n",
+                curCoreMask, result, Result);
+            return Result;
+        }
 
         *outputMask = result;
         return S_OK;
@@ -295,7 +529,13 @@ struct VMInfo
 
         if (!primary)
         {
-            CHECK_CALL(HVMAgent_UpdateHVMCoresUsingMask(ipiGroup, curCoreMask), "");
+            HRESULT Result = HVMAgent_UpdateHVMCoresUsingMask(ipiGroup, curCoreMask);
+            if (FAILED(Result))
+            {
+                wprintf(L"Error adding cores to secondary; mask 0x%lx, new curCoreMask: 0x%lx: 0x%lx\n", mask,
+                    curCoreMask, Result);
+                return Result;
+            }
         }
         return S_OK;
     }
@@ -310,11 +550,23 @@ struct VMInfo
         return HVMAgent_CoreCount(busyCoreMask(systemBusyMask));
     }
 
+    BucketId GetCpuWaitTimePercentileBucketId(const std::wstring& fullVmName, double percentile)
+    {
+      return cpuWaitTimeBucketCounters[fullVmName]->GetPercentile(percentile);
+    }
+
+    BucketId GetCpuWaitTimePercentileBucketId(double percentile)
+    {
+        return GetCpuWaitTimePercentileBucketId(fullVmNames[0], percentile);
+    }
+
     UINT32 curCores;
     UINT32 minCores;
     UINT32 maxCores;
     CPU_SET curCoreMask;
     std::vector<HCS_SYSTEM> handles;
+    std::vector<std::wstring> fullVmNames;
+    std::unordered_map<std::wstring, CpuWaitTimeBucketCounters*> cpuWaitTimeBucketCounters;
 
     Mode mode;
     GUID ipiGroup;
@@ -324,3 +576,4 @@ struct VMInfo
     BOOLEAN disjointCpuGroups;
     CpuInfo cpuInfo;
 };
+
