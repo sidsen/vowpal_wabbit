@@ -433,7 +433,7 @@ struct Record
   int cpu_max;
   int overpredicted;
   int safeguard;
-  int feedback_max;
+  int explore;
   int updateModel;
 };
 
@@ -462,7 +462,7 @@ void writeLogs()
     fprintf(output_fp,
         "iteration,time_sec,hvm_busy_cores,hvm_cores,primary_busy_cores,primary_cores,primary_cores_mask,system_busy_"
         "mask_raw,f_min,f_max,f_avg,f_stddev,f_med,"
-        "pred_peak,upper_bound,cpu_max,overpredicted,safeguard,feedback_max,update_model\n");
+        "pred_peak,upper_bound,cpu_max,overpredicted,safeguard,explore,update_model\n");
     fflush(output_fp);
 
     // ASSERT(SetConsoleCtrlHandler(consoleHandler, TRUE));
@@ -474,12 +474,12 @@ void writeLogs()
         fprintf(output_fp, "%d,%.6lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount, r.time,
             r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(), r.systemBusyMask.c_str(),
             r.min, r.max, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max, r.overpredicted, r.safeguard,
-            r.feedback_max, r.updateModel);
+            r.explore, r.updateModel);
       else
         fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount, r.time,
             r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(), r.systemBusyMask.c_str(),
             r.min, r.max, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max, r.overpredicted, r.safeguard,
-            r.feedback_max, r.updateModel);
+            r.explore, r.updateModel);
     }
 
     fflush(output_fp);
@@ -627,6 +627,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   int sum = 0;
   int max = 0;
   int feedback_max = 0;
+  int explore = 0;
   int min = primary.maxCores;
   double med = 0;
   double stddev = 0;
@@ -1369,11 +1370,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                   std::cout << "action " << i + 1 << " prob: " << prob << std::endl;
                 if (prob == 1)
                 {
-                  randint = rand() % PRIMARY_SIZE + 1;
-                  if (randint > 8)
-                    pred = PRIMARY_SIZE;
-                  else
-                    pred = i + 1;
+                  pred = i + 1;
                   break;
                 }
               }
@@ -1442,12 +1439,26 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
       }
 
+      if (LEARNING_ALGO == CBEXPLORE)
+      {
+        randint = rand() % PRIMARY_SIZE + 1;
+        if (randint > 8)
+          explore = 1;
+      }
+
+
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
           primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-          min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, feedback_max,
+          min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, explore,
           updateModel};
 
       /****** update CPU affinity ******/
+      if (explore)
+      {
+        newPrimaryCores = PRIMARY_SIZE;
+        explore = 0;
+      }
+
       if (NO_PRED)
       {
         pred_alloc = newPrimaryCores;
