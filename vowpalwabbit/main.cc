@@ -801,6 +801,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         stop_harvest = 0;
         reset = 0;
+        std::cout << "ON" << endl;
         if (REENABLE_HARVEST_PERIODIC)
           reenable_harvest_start = high_resolution_clock::now();
       }
@@ -819,6 +820,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         {
           // wait time too long--> disable harvesting
           stop_harvest = 1;
+          std::cout << "OFF" << endl;
           if (!REENABLE_HARVEST_PERIODIC)
             reenable_harvest_start = high_resolution_clock::now();
         }
