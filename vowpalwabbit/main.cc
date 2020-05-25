@@ -877,6 +877,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       size = 0;
       // count = 0;
       max = 0;
+      cpu_max_observed = 0;
       min = primary.maxCores;
       cpu_busy_a.clear();
       invoke_learning = 0;
@@ -910,6 +911,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
 
         // record cpu reading
+        if (primaryBusyCores > cpu_max_observed)
+          cpu_max_observed = primaryBusyCores;
         if (NO_PRED && DEPLOY_ONLY)
           primaryBusyCores = std::min(primaryBusyCores, newPrimaryCores);
         cpu_busy_a.push_back(primaryBusyCores);
@@ -1028,7 +1031,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       else
         med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2.0;
 
-      cpu_max_observed = max;
+      //cpu_max_observed = max;
       if (LEARNING_MODE == 7)
       {
         min = 1;
@@ -1166,9 +1169,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             else
               correct_class = max;
             */
-            // correct_class = max;
-            cpu_max_observed = max;
-            correct_class = cpu_max_observed;
+            correct_class = max;
+            // cpu_max_observed = max;
+            // correct_class = cpu_max_observed;
             // if (NO_PRED && LEARNING_MODE == 5)
             //  correct_class = std::min(max, newPrimaryCores);
 
