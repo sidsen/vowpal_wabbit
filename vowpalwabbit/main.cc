@@ -695,6 +695,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   int prevSafeguard = 0;
   int updateModel = 0;
   BucketId bucketId = BucketX7;
+  BucketId bucketIdPrev = BucketX7;
+
 
   int buffer_empty_consecutive_count = 0;
   // initialize vw
@@ -816,7 +818,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       bucketId = primary.GetCpuWaitTimePercentileBucketId(99.9);
       if (DISABLE_HARVEST && !first_iter)  // harvesting allowed to be disabled
       {
-        if (bucketId >= bucketIdThresh)
+        if (bucketId >= bucketIdThresh && bucketIdPrev >= bucketIdThresh)
         {
           // wait time too long--> disable harvesting
           stop_harvest = 1;
@@ -824,6 +826,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           if (!REENABLE_HARVEST_PERIODIC)
             reenable_harvest_start = high_resolution_clock::now();
         }
+        bucketIdPrev = bucketId;
       }
       check_dispatch_start = high_resolution_clock::now();
       first_iter = 0;
