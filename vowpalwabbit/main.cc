@@ -826,8 +826,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
       }
       check_dispatch_start = high_resolution_clock::now();
+      first_iter = 0;
     }
-    first_iter = 0;
 
     if (NO_HARVESTING)
     {
