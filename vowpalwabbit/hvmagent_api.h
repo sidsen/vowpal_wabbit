@@ -278,7 +278,9 @@ struct CpuWaitTimeBucketCounters
     UINT64 accumulativeCount = 0;
     std::cout << "TotalSamples " << TotalSamples << ";\t buckets: [";
 
-    BucketId result = Bucket6;
+    BucketId result = BucketX7;
+    if (TotalSamples < 1000)
+      return result;
 
     for (auto bucket : BucketIdMap)
     {
