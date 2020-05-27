@@ -116,6 +116,7 @@ const WCHAR ARG_CHECK_DISPATCH_MS[] = L"--check_dispatch_ms";
 const WCHAR ARG_REENABLE_HARVEST_PERIODIC[] = L"--reenable_harvest_periodic";
 const WCHAR ARG_REENABLE_HARVEST_SEC[] = L"--reenable_harvest_sec";
 const WCHAR ARG_BUCKET[] = L"--bucket";
+const WCHAR ARG_PERC[] = L"--perc";
 
 std::wstring output_csv = L"";
 int RUN_DURATION_SEC = 0;
@@ -138,6 +139,7 @@ int REENABLE_HARVEST_PERIODIC = 1;
 int REENABLE_HARVEST_SEC = 10;  // default 10 sec
 int BUCKET = 0;
 BucketId bucketIdThresh = Bucket0;
+float PERC = 99.9;
 
 int PRED_ONE_OVER = 0;
 int FIXED_DELAY = 0;
@@ -416,6 +418,10 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
           bucketIdThresh = Bucket0;
       }        
     }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_PERC, ARRAY_SIZE(ARG_PERC)))
+    {
+      PERC = _wtof(argv[1]);
+    }
     else
     {
       wprintf(L"Unknown argument: %s\n", argv[0]);
@@ -466,6 +472,7 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   wcout << "REENABLE_HARVEST_PERIODIC: " << REENABLE_HARVEST_PERIODIC << std::endl;
   wcout << "REENABLE_HARVEST_SEC: " << REENABLE_HARVEST_SEC << std::endl;
   cout << "bucketIdThresh: " << BucketIdMapA[bucketIdThresh] << std::endl;
+  cout << "PERC: " << PERC << std::endl;
 
   wcout << "FIXED_BUFFER_MODE: " << FIXED_BUFFER_MODE << std::endl;
   wcout << "MAX_HVM_CORES: " << MAX_HVM_CORES << std::endl;
@@ -745,7 +752,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   int stop_harvest = 0;
   int reset = 0;
   if (DISABLE_HARVEST)
-    std::cout << "harvesting can be disabled (if p99.9 vcpu dispatch wait time lies in bucket >= " << BucketIdMapA[bucketIdThresh] << ")" << endl;
+    std::cout << "harvesting can be disabled (if p"<< PERC << " vcpu dispatch wait time lies in bucket >= " << BucketIdMapA[bucketIdThresh] << ")" << endl;
   else
     std::cout << "harvesting cannot be disabled" << endl;
 
@@ -815,7 +822,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
     if (us_elapsed.count() >= check_dispatch_us)
     {
       std::cout << timer.ElapsedUS() / 1000000.0 << " sec elapsed;\t";
-      bucketId = primary.GetCpuWaitTimePercentileBucketId(99.9);
+      bucketId = primary.GetCpuWaitTimePercentileBucketId(PERC);
       if (DISABLE_HARVEST && !first_iter)  // harvesting allowed to be disabled
       {
         if (bucketId >= bucketIdThresh && bucketIdPrev >= bucketIdThresh)
