@@ -279,7 +279,7 @@ struct CpuWaitTimeBucketCounters
     std::cout << "TotalSamples " << TotalSamples << ";\t buckets: [";
 
     BucketId result = BucketX7;
-    if (TotalSamples < 1000)
+    if (TotalSamples < 10000)
       return result;
 
     for (auto bucket : BucketIdMap)
