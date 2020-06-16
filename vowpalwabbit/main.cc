@@ -88,6 +88,7 @@ const WCHAR ARG_LEARNING_MS[] = L"--learning_ms";
 const WCHAR ARG_TIMING[] = L"--timing";
 const WCHAR ARG_DEBUG[] = L"--debug";
 const WCHAR ARG_NO_HARVESTING[] = L"--no_harvesting";
+const WCHAR ARG_USE_PREV_PEAK[] = L"--use_prev_peak";
 const WCHAR ARG_PRIMARY_ALONE[] = L"--primary_alone";
 const WCHAR ARG_FEEDBACK[] = L"--feedback";
 const WCHAR ARG_FEEDBACK_MS[] = L"--feedback_ms";
@@ -147,6 +148,7 @@ int LEARNING_MS = 0;  // prediction window in ms
 int TIMING = 0;       // measure vw timing
 int DEBUG = 0;        // print debug messages
 int NO_HARVESTING = 0;
+int USE_PREV_PEAK = 0;
 int PRIMARY_ALONE = 0;
 int PRIMARY_SIZE = 0;
 
@@ -239,6 +241,10 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     else if (0 == ::_wcsnicmp(argv[0], ARG_NO_HARVESTING, ARRAY_SIZE(ARG_NO_HARVESTING)))
     {
       NO_HARVESTING = _wtoi(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_USE_PREV_PEAK, ARRAY_SIZE(ARG_USE_PREV_PEAK)))
+    {
+      USE_PREV_PEAK = _wtoi(argv[1]);
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_PRIMARY_ALONE, ARRAY_SIZE(ARG_PRIMARY_ALONE)))
     {
@@ -570,7 +576,7 @@ void writeLogs()
     FILE* output_cpu_fp = nullptr;
     output_cpu_fp = _wfopen(output_cpu_csv.c_str(), L"w+");
     ASSERT(output_cpu_fp != NULL);
-    fprintf(output_cpu_fp, "time_sec,primary_busy_cores,primary_cores\n");
+    fprintf(output_cpu_fp, "window,primary_busy_cores,primary_cores\n");
     for (size_t i = 0; i < numLogEntriesCPU; i++)
     {
       RecordCPU r = recordsCPU[i];
@@ -839,6 +845,70 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       first_iter = 0;
     }
 
+    if (USE_PREV_PEAK)
+    {
+      start = high_resolution_clock::now();
+      max = 0;  // reset max
+
+      while (true)
+      {
+        HVMAgent_SpinUS(read_cpu_sleep_us);
+
+        systemBusyMask = HVMAgent_BusyMaskCoresNonSMTVMs();
+        hvmBusyCores = hvm.busyCores(systemBusyMask);
+        hvmCores = hvm.curCores;
+        primaryBusyCores = primary.busyCores(systemBusyMask);
+        primaryCores = primary.curCores;
+
+        if (primaryBusyCores > max)
+          max = primaryBusyCores;
+
+        if (DEBUG_PEAK)
+        {
+          recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores, primaryCores};
+          ASSERT(numLogEntries < MAX_RECORDS);
+        }
+
+        stop = high_resolution_clock::now();
+        us_elapsed = duration_cast<microseconds>(stop - start);
+        if (us_elapsed.count() >= learning_us)
+          break;  // log max from every 2ms
+      }
+
+      if (max == newPrimaryCores)
+        newPrimaryCores = std::min(max + 1, (int)primary.maxCores);  // increase vm size by one
+      else
+        newPrimaryCores = max;
+
+      if (LOGGING)
+      {
+        records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+            primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
+            0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
+        ASSERT(numLogEntries < MAX_RECORDS);
+      }
+      if (stop_harvest)
+      {
+        if (!reset)
+        {
+          updateCores(PRIMARY_SIZE, systemBusyMask);
+          HVMAgent_SpinUS(sleep_us);
+          reset = 1;
+        }
+      }
+      else
+      {
+        // update hvm size
+        if (newPrimaryCores != primary.curCores)
+        {
+          updateCores(newPrimaryCores, systemBusyMask);
+          HVMAgent_SpinUS(sleep_us);
+          count++;
+        }
+      }
+    }
+
+
     if (NO_HARVESTING)
     {
       start = high_resolution_clock::now();
@@ -871,13 +941,14 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
       if (LOGGING)
       {
-        //bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
+        // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
         records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
             primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
             0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
         ASSERT(numLogEntries < MAX_RECORDS);
       }
     }
+
 
     else if (FIXED_BUFFER_MODE)
     {
