@@ -64,7 +64,9 @@ using namespace std;
 #define MAX_HVM_CORES 24  // 12
 #define MIN_HVM_CORES 1   // 6
 
-/* process args */
+/************************/
+// Input Parsing
+/************************/
 const WCHAR ARG_CSV[] = L"--csv";
 const WCHAR ARG_DURATION[] = L"--duration_sec";
 const WCHAR ARG_BUFFER[] = L"--buffer";
@@ -124,9 +126,6 @@ LearningAlgo LEARNING_ALGO = CSOAA;  // use CSOAA as the learning algo by defaul
 int COST_FUNCTION = 0;
 float LEARNING_RATE = 0.1;
 
-// 1: fixed rate learning without safeguard
-// 2: fixed rate learning with safeguard
-// 3: moving rate learning
 int DISABLE_HARVEST = 0;
 int CHECK_DISPATCH_MS = 1000;  // default 1 sec
 int REENABLE_HARVEST_PERIODIC = 1;
@@ -478,7 +477,9 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   wcout << "MIN_HVM_CORES: " << MIN_HVM_CORES << std::endl;
 }
 
-/* logging */
+/************************/
+// logging functions
+/************************/
 struct Record
 {
   int updateCount;
@@ -502,6 +503,16 @@ struct Record
   int feedback_max;
   int updateModel;
   BucketId bucketId = Bucket6;
+};
+
+struct CpuLog
+{
+  int hvmBusy;
+  int hvmCores;
+  int primaryBusy;
+  int primaryCores;
+  string primaryCoresMask;
+  string systemBusyMask;
 };
 
 struct RecordCPU
@@ -641,15 +652,21 @@ void init()
 }
 
 CycleCounter timer;
-void computeFeature(Feature* f, int learningWindowUs)
+void computeFeature(Feature* f, int learningWindowUs, cpuLog* log)
 {
+  if (DEBUG)
+    cout << "learningWindowUs: " << learningWindowUs << " read_cpu_sleep_us:" << read_cpu_sleep_us << endl;
+
   high_resolution_clock::time_point tStart, tStop;
-  microseconds us_elapsed;
+  microseconds usElapsed;
   UINT64 systemBusyMask;
   INT32 primaryBusyCores, primaryCores, hvmBusyCores, hvmCores;
   INT32 newPrimaryCores = primary.maxCores;
-  vector<int64_t> cpu_busy;  // num of busy cpu cores of primary vm --> reading every <1us
+  vector<int64_t> cpuBusy;  // num of busy cpu cores of primary vm --> reading every <1us
   int sum = 0;
+  int max = 0;
+  int min = primary.maxCores;
+
 
   // collect cpu data for vw learning window
   tStart = high_resolution_clock::now();
@@ -657,46 +674,54 @@ void computeFeature(Feature* f, int learningWindowUs)
   {
     HVMAgent_SpinUS(read_cpu_sleep_us);
     // read cpu usage
-    systemBusyMask = HVMAgent_BusyMaskCoresNonSMTVMs();
-    hvmBusyCores = hvm.busyCores(systemBusyMask);
-    hvmCores = hvm.curCores;
-    primaryBusyCores = primary.busyCores(systemBusyMask);
-    primaryCores = primary.curCores;
+    log->systemBusyMask = HVMAgent_BusyMaskCoresNonSMTVMs();
+    log->hvmBusyCores = hvm.busyCores(systemBusyMask);
+    log->hvmCores = hvm.curCores;
+    log->primaryBusyCores = primary.busyCores(systemBusyMask);
+    log->primaryCores = primary.curCores;
+    
+    //cout << "1" << endl;
+
     if (DEBUG_PEAK)
     {
       recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores, primaryCores};
       ASSERT(numLogEntries < MAX_RECORDS);
     }
     // record cpu reading
-    cpu_busy.push_back(primaryBusyCores);
+    cpuBusy.push_back(primaryBusyCores);
     sum += primaryBusyCores;
-    if (primaryBusyCores < f->min)
-      f->min = primaryBusyCores;
-    if (primaryBusyCores > f->max)
-      f->max = primaryBusyCores;
+    if (primaryBusyCores < min)
+      min = primaryBusyCores;
+    if (primaryBusyCores > max)
+      max = primaryBusyCores;
+    //cout << "2" << endl;
     // check time
     tStop = high_resolution_clock::now();
-    us_elapsed = duration_cast<microseconds>(tStop - tStart);
-    if (us_elapsed.count() >= learningWindowUs)
+    usElapsed = duration_cast<microseconds>(tStop - tStart);
+    if (usElapsed.count() >= learningWindowUs)
       break;  // a learning window past
   }
 
+  //cout << "compute features" << endl;
   // compute features
-  tStart = high_resolution_clock::now();
-  int size = cpu_busy.size();
+  f->min = min;
+  f->max = max;
+  //cout << "compute features2" << endl;
+
+  int size = cpuBusy.size();
   f->avg = 1.0 * sum / size;
   double tmp = 0;
   for (int i = 0; i < size; i++)
   {
-    tmp += (cpu_busy[i] - f->avg) * (cpu_busy[i] - f->avg);
+    tmp += (cpuBusy[i] - f->avg) * (cpuBusy[i] - f->avg);
   }
   tmp = 1.0 * tmp / size;
   f->stddev = sqrt(tmp);
-  std::sort(cpu_busy.begin(), cpu_busy.end());
+  std::sort(cpuBusy.begin(), cpuBusy.end());
   if (size % 2 != 0)
-    f->med = cpu_busy[size / 2];
+    f->med = cpuBusy[size / 2];
   else
-    f->med = (cpu_busy[(size - 1) / 2] + cpu_busy[size / 2]) / 2.0;
+    f->med = (cpuBusy[(size - 1) / 2] + cpuBusy[size / 2]) / 2.0;
 }
 
 string getVWFeature(Feature* f)
@@ -770,19 +795,28 @@ string getVWLabel(int cpuPeakObserved)
   return vwLabel;
 }
 
-/*
-  optional 1st arg = buffer size
-*/
-// int main(int argc, char* argv[])
+
+/************************/
+// main function
+/************************/
 int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 {
   verbose = FALSE;
   process_args(argc, argv);
+
+  struct CpuLog log;
+  struct CpuLog* l = &log;
   int sleep_us = (int)SLEEP_MS * 1000;
+  int newPrimaryCoresPrev = 0;
+  int debug_count = 0;
 
   /************************/
   // initialize HVM agent
   /************************/
+  UINT64 systemBusyMask;
+  INT32 primaryBusyCores, primaryCores, hvmBusyCores, hvmCores;
+  INT32 newPrimaryCores = primary.maxCores;
+
   init();
 
   time_t now = time(0);
@@ -790,64 +824,47 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   // cout << "HVM agent initialized: " << dt << endl;
 
   /************************/
-  // VW learning agent
+  // initialize vw learning 
   /************************/
-  size_t size;  // 10 * 1000 / 50 = 200 readings per 10ms
-  vector<int64_t> feature_compute_us, model_update_us, model_inference_us;
-
   int firstWindow = 1;
   int learning_us = LEARNING_MS * 1000;
-  int feedback_us = FEEDBACK_MS * 1000;
-  int check_dispatch_us = CHECK_DISPATCH_MS * 1000;
-  int reenable_harvest_us = REENABLE_HARVEST_SEC * 1000 * 1000;
-
   int count = 0;
   int cpuPeakObserved, predPeak, overPredicted, invokeLearning, invokeSafeguard;
-
-  BucketId bucketId = BucketX7;
-  BucketId bucketIdPrev = BucketX7;
-
   string vwLabel, vwFeature, vwMsg;
+  Feature feature;
+  Feature* f = &feature;
   // initialize vw learning
   ASSERT(SUCCEEDED(modelInit(LEARNING_ALGO, primary.maxCores, LEARNING_RATE)));
 
   /************************/
-  // learning tweaks
+  // initialize parameters for global safeguard
   /************************/
-  int use_curr_busy = 1;
-  std::cout << "************************" << endl;
-  std::cout << "always update learning model" << endl;
-  std::cout << "update under-predictions with (correct_label = observed_peak+1)" << endl;
-  if (use_curr_busy)
-    std::cout << "use current busy" << endl;
-  else
-    std::cout << "use max from previous window" << endl;
-  std::cout << "************************" << endl;
+  high_resolution_clock::time_point checkDispatchStart, checkDispatchStop;
+  high_resolution_clock::time_point reenableHarvestStart, reenableHarvestStop;
+  microseconds usElapsed;
 
-  int stop_harvest = 0;
+  int stopHarvest = 0;
   int reset = 0;
+  int checkDispatchUs = CHECK_DISPATCH_MS * 1000;
+  int reenableHarvestUs = REENABLE_HARVEST_SEC * 1000 * 1000;
+
+  BucketId bucketId = BucketX7;
+  BucketId bucketIdPrev = BucketX7;
+
   if (DISABLE_HARVEST)
     std::cout << "harvesting can be disabled (if p" << PERC
               << " vcpu dispatch wait time lies in bucket >= " << BucketIdMapA[bucketIdThresh] << ")" << endl;
   else
     std::cout << "harvesting cannot be disabled" << endl;
 
+
   /************************/
   // set up latency measurements
   /************************/
-  auto start = high_resolution_clock::now();
-  auto stop = high_resolution_clock::now();
-  auto learn_start = high_resolution_clock::now();
-  auto learn_stop = high_resolution_clock::now();
-  auto feedback_start = high_resolution_clock::now();
-  auto feedback_stop = high_resolution_clock::now();
-  auto check_dispatch_start = high_resolution_clock::now();
-  auto check_dispatch_stop = high_resolution_clock::now();
-  auto reenable_harvest_start = high_resolution_clock::now();
-  auto reenable_harvest_stop = high_resolution_clock::now();
-  auto duration = duration_cast<microseconds>(stop - start);
-  auto us_elapsed = duration_cast<microseconds>(stop - start);
-  // auto time_data_collection, time_feature_computation, time_model_udpate, time_model_inference, time_cpugroup_update;
+  vector<int64_t> feature_compute_us, model_update_us, model_inference_us;
+
+  high_resolution_clock::time_point start, stop, learnStart, learnStop;
+  microseconds duration;
 
   int delay_us;
   delay_us = (int)(DELAY_MS * 1000);
@@ -855,18 +872,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   /************************/
   // main loop
   /************************/
-  Feature* f;
-  int first_iter = 1;
-  int newPrimaryCoresPrev = 0;
-
-  int debug_count = 0;
-  auto start_1min = high_resolution_clock::now();
-
-  // CycleCounter timer;
   timer.Start();
-  UINT64 systemBusyMask;
-  INT32 primaryBusyCores, primaryCores, hvmBusyCores, hvmCores;
-  INT32 newPrimaryCores = primary.maxCores;
 
   now = time(0);
   dt = ctime(&now);
@@ -878,42 +884,41 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
     if (DEBUG && debug_count > 6)
       break;
 
-    // reenable harvesting (if it was disabled) every reenable_harvest_us
-    if (stop_harvest)
+    // reenable harvesting (if it was disabled) every reenableHarvestUs
+    if (stopHarvest)
     {
-      reenable_harvest_stop = high_resolution_clock::now();
-      us_elapsed = duration_cast<microseconds>(reenable_harvest_stop - reenable_harvest_start);
-      if (us_elapsed.count() >= reenable_harvest_us)
+      reenableHarvestStop = high_resolution_clock::now();
+      usElapsed = duration_cast<microseconds>(reenableHarvestStop - reenableHarvestStart);
+      if (usElapsed.count() >= reenableHarvestUs)
       {
-        stop_harvest = 0;
+        stopHarvest = 0;
         reset = 0;
         std::cout << "ON" << endl;
         if (REENABLE_HARVEST_PERIODIC)
-          reenable_harvest_start = high_resolution_clock::now();
+          reenableHarvestStart = high_resolution_clock::now();
       }
     }
 
-    // check for vcpu wait time every check_dispatch_us
-    check_dispatch_stop = high_resolution_clock::now();
-    us_elapsed = duration_cast<microseconds>(check_dispatch_stop - check_dispatch_start);
-    if (us_elapsed.count() >= check_dispatch_us)
+    // check for vcpu wait time every checkDispatchUs
+    checkDispatchStop = high_resolution_clock::now();
+    usElapsed = duration_cast<microseconds>(checkDispatchStop - checkDispatchStart);
+    if (usElapsed.count() >= checkDispatchUs)
     {
       std::cout << timer.ElapsedUS() / 1000000.0 << " sec elapsed;\t";
       bucketId = primary.GetCpuWaitTimePercentileBucketId(PERC);
-      if (DISABLE_HARVEST && !first_iter)  // harvesting allowed to be disabled
+      if (DISABLE_HARVEST && !firstWindow)  // harvesting allowed to be disabled
       {
         if (bucketId >= bucketIdThresh && bucketIdPrev >= bucketIdThresh)
         {
           // wait time too long--> disable harvesting
-          stop_harvest = 1;
+          stopHarvest = 1;
           std::cout << "OFF" << endl;
           if (!REENABLE_HARVEST_PERIODIC)
-            reenable_harvest_start = high_resolution_clock::now();
+            checkDispatchStart = high_resolution_clock::now();
         }
         bucketIdPrev = bucketId;
       }
-      check_dispatch_start = high_resolution_clock::now();
-      first_iter = 0;
+      checkDispatchStart = high_resolution_clock::now();
     }
 
     if (USE_PREV_PEAK)
@@ -941,8 +946,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
 
         stop = high_resolution_clock::now();
-        us_elapsed = duration_cast<microseconds>(stop - start);
-        if (us_elapsed.count() >= learning_us)
+        usElapsed = duration_cast<microseconds>(stop - start);
+        if (usElapsed.count() >= learning_us)
           break;  // log max from every 2ms
       }
 
@@ -958,7 +963,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             0, 0, 0, 0, 0, 0, newPrimaryCores, cpuPeakObserved, 0, 0, 0, 0, bucketId};
         ASSERT(numLogEntries < MAX_RECORDS);
       }
-      if (stop_harvest)
+      if (stopHarvest)
       {
         if (!reset)
         {
@@ -1004,8 +1009,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
 
         stop = high_resolution_clock::now();
-        us_elapsed = duration_cast<microseconds>(stop - start);
-        if (us_elapsed.count() >= learning_us)
+        usElapsed = duration_cast<microseconds>(stop - start);
+        if (usElapsed.count() >= learning_us)
           break;  // log max from every 2ms
       }
 
@@ -1041,8 +1046,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           cpuPeakObserved = primaryBusyCores;
 
         stop = high_resolution_clock::now();
-        us_elapsed = duration_cast<microseconds>(stop - start);
-        if (us_elapsed.count() >= delay_us)
+        usElapsed = duration_cast<microseconds>(stop - start);
+        if (usElapsed.count() >= delay_us)
           break;  // log max from delay_us
       }
 
@@ -1070,18 +1075,21 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
     else
     {
-      learn_start = high_resolution_clock::now();
+      if (DEBUG)
+        std::cout << "Using vw learning" << endl;
 
       // resetting parameters
       overPredicted = 1;
       invokeLearning = 1;
       invokeSafeguard = 0;
+      learnStart = high_resolution_clock::now();
 
       // compute features
       start = high_resolution_clock::now();
       computeFeature(f, learning_us);
-      vwFeature = getVWFeature(f);
       cpuPeakObserved = f->max;
+      if (DEBUG)
+        std::cout << "retured from computefeature" << endl;
 
       if (TIMING)
       {
@@ -1094,9 +1102,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       if (firstWindow)
       {
         // first iteration gives all cores to primary VM
-        firstWindow = 0;
         newPrimaryCores = primary.maxCores;
         newPrimaryCoresPrev = newPrimaryCores;
+        vwFeature = getVWFeature(f);
       }
       else
       {
@@ -1134,6 +1142,11 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           vwLabel.clear();
           vwLabel = getVWLabel(cpuPeakObserved);
           // update model
+          if (DEBUG)
+          {
+            std::cout << "vwLabel to update model: " << vwLabel.c_str() << endl;
+            std::cout << "vwFeature to update model: " << vwFeature.c_str() << endl;
+          }
           ASSERT(SUCCEEDED(modelUpdate(vwLabel, vwFeature)));
 
           if (TIMING)
@@ -1145,13 +1158,13 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           }
 
           // predict cpu peak for next learning window
+          vwFeature = getVWFeature(f);
           predPeak = (int)ceil(modelPredict(LEARNING_ALGO, vwFeature));
           // compute new core assignment (keep at least 1 core in addition to current # cores used by primary VM)
           newPrimaryCores = std::min(std::max(predPeak, primaryBusyCores + 1), (INT32)primary.maxCores);
 
           if (PRED_PLUS_ONE)
             newPrimaryCores = std::min(std::max(predPeak + PRED_PLUS_OFFSET, primaryBusyCores + 1), (INT32)primary.maxCores);
-
           if (TIMING)
           {
             stop = high_resolution_clock::now();
@@ -1189,7 +1202,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
       else
       {
-        if (stop_harvest)
+        if (stopHarvest)
         {
           if (!reset)
           {
@@ -1218,6 +1231,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
       }
 
+      firstWindow = 0;
       ASSERT(numLogEntries < MAX_RECORDS);
     }
   }
