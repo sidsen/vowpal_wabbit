@@ -1,53 +1,9 @@
 #pragma once
 
-#ifdef _WIN32
-#include <WinSock2.h>
-#else
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#endif
-#include <sys/timeb.h>
-#include "parse_args.h"
-#include "parse_regressor.h"
-#include "accumulate.h"
-#include "best_constant.h"
-#include "vw_exception.h"
-#include <fstream>
-
-#include "options.h"
-#include "options_boost_po.h"
-
-#include <iostream>
-#include <stdio.h>
-#include <windows.h>
-#include <winternl.h>
-#include <assert.h>
-
-#include <cstring>
-#include <string>
-
-#include "hvmagent_api.h"
-#include "learning_api.h"
-#include "helper.h"
-
-#include <bitset>
-#include "vw.h"
-
-#include <math.h>
-#include <cguid.h>
-#include <chrono>
-#include <algorithm>
-#include <ctime>
-
-#include "cyclecounter.h"
-
-using namespace std::chrono;
-using namespace std;
-
 #include "vw.h"
 #include "vw_exception.h"
-
 using namespace VW::config;
+using namespace std;
 
 enum LearningAlgo
 {
@@ -72,9 +28,11 @@ typedef struct Feature
 
 vw* vwPtr;
 
+/************************/
+// initialize vw
+/************************/
 HRESULT modelInit(LearningAlgo algo, int maxCores, float learningRate)
 {
-  // initialize vw
   switch (algo)
   {
     case CSOAA:
@@ -93,6 +51,9 @@ HRESULT modelInit(LearningAlgo algo, int maxCores, float learningRate)
 }
 
 
+/************************/
+// update vw model 
+/************************/
 HRESULT modelUpdate(string vwLabel, string vwFeature)
 {
   string vwMsg;
@@ -101,8 +62,8 @@ HRESULT modelUpdate(string vwLabel, string vwFeature)
   // create vw training data
   // vwLabel = "1:3 2:0 3:-1";
   // vwFeature = " |busy_cores_prev_interval min:0 max:0 avg:0 stddev:0 med:0"
-  vwMsg = vwLabel + vwFeature;                   // vwLabel from current window, features generated from previous window
-  exPtr = VW::read_example(*vwPtr, vwMsg.c_str());  // update vw model with features from previous window
+  vwMsg = vwLabel + vwFeature;                   
+  exPtr = VW::read_example(*vwPtr, vwMsg.c_str()); 
 
   // udpate vw model
   vwPtr->learn(*exPtr);
@@ -112,6 +73,9 @@ HRESULT modelUpdate(string vwLabel, string vwFeature)
 }
 
 
+/************************/
+// get prediction from vw model
+/************************/
 float modelPredict(LearningAlgo algo, string vwFeature)
 {
   float pred;
