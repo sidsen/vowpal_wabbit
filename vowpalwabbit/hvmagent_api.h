@@ -502,6 +502,17 @@ struct VMInfo
 
     curCoreMask &= ~result;
 
+    if (disjointCpuGroups)
+    {
+      HRESULT Result = HVMAgent_UpdateHVMCoresUsingMask(ipiGroup, curCoreMask);
+      if (FAILED(Result))
+      {
+        wprintf(
+            L"Error extracting cores; new curCoreMask: 0x%lx output Mask: 0x%lx: 0x%lx\n", curCoreMask, result, Result);
+        return Result;
+      }
+    }
+
     *outputMask = result;
     CHECK(numCores == 0);
     return S_OK;
@@ -515,7 +526,7 @@ struct VMInfo
 
     CHECK(numCores == HVMAgent_CoreCount(mask));
 
-    if (!primary)
+    if (!primary || disjointCpuGroups)
     {
       HRESULT Result = HVMAgent_UpdateHVMCoresUsingMask(ipiGroup, curCoreMask);
       if (FAILED(Result))
