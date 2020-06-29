@@ -30,7 +30,8 @@ license as described in the file LICENSE.
 #include <string>
 
 #include "hvmagent_api.h"
-//#include "helper.h"
+#include "learning_api.h"
+#include "helper.h"
 
 #include <bitset>
 #include "vw.h"
@@ -45,7 +46,6 @@ license as described in the file LICENSE.
 
 using namespace std::chrono;
 using namespace std;
-using namespace VW::config;
 
 #define MAX_CORES 64  // hardcoded for now (64-bit core busy mask)
 
@@ -64,19 +64,14 @@ using namespace VW::config;
 #define MAX_HVM_CORES 24  // 12
 #define MIN_HVM_CORES 1   // 6
 
-enum LearningAlgo
-{
-  CSOAA,
-  REG,
-  CBANDIT
-};
-
-/* process args */
+/************************/
+// Input Parsing
+/************************/
 const WCHAR ARG_CSV[] = L"--csv";
 const WCHAR ARG_DURATION[] = L"--duration_sec";
 const WCHAR ARG_BUFFER[] = L"--buffer";
 const WCHAR ARG_DELAY_MS[] = L"--delay_ms";
-const WCHAR ARG_REACTIVE_FIXED_BUFFER_MODE[] = L"--reactive_buffer_mode";
+const WCHAR ARG_REACTIVE_FIXED_BUFFER[] = L"--reactive_buffer_mode";
 const WCHAR ARG_LEARNING_MODE[] = L"--learning_mode";
 const WCHAR ARG_LEARNING_ALGO[] = L"--learning_algo";
 const WCHAR ARG_LEARNING_ALGO_CSOAA[] = L"csoaa";
@@ -123,8 +118,8 @@ const WCHAR ARG_PERC[] = L"--perc";
 std::wstring output_csv = L"";
 int RUN_DURATION_SEC = 0;
 int bufferSize = -1;
-int FIXED_BUFFER_MODE = 0;
-int REACTIVE_FIXED_BUFFER_MODE = 0;
+int FIXED_BUFFER = 0;
+int REACTIVE_FIXED_BUFFER = 0;
 float DELAY_MS = 0;
 int LEARNING = 0;
 int LEARNING_MODE = 0;
@@ -132,11 +127,8 @@ LearningAlgo LEARNING_ALGO = CSOAA;  // use CSOAA as the learning algo by defaul
 int COST_FUNCTION = 0;
 float LEARNING_RATE = 0.1;
 
-// 1: fixed rate learning without safeguard
-// 2: fixed rate learning with safeguard
-// 3: moving rate learning
 int DISABLE_HARVEST = 0;
-int CHECK_DISPATCH_MS = 1000;   // default 1 sec
+int CHECK_DISPATCH_MS = 1000;  // default 1 sec
 int REENABLE_HARVEST_PERIODIC = 1;
 int REENABLE_HARVEST_SEC = 10;  // default 10 sec
 int BUCKET = 0;
@@ -204,13 +196,12 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     else if (0 == ::_wcsnicmp(argv[0], ARG_BUFFER, ARRAY_SIZE(ARG_BUFFER)))
     {
       bufferSize = _wtoi(argv[1]);
-      FIXED_BUFFER_MODE = 1;
+      FIXED_BUFFER = 1;
     }
-    else if (0 == ::_wcsnicmp(argv[0], ARG_REACTIVE_FIXED_BUFFER_MODE, ARRAY_SIZE(ARG_REACTIVE_FIXED_BUFFER_MODE)))
+    else if (0 == ::_wcsnicmp(argv[0], ARG_REACTIVE_FIXED_BUFFER, ARRAY_SIZE(ARG_REACTIVE_FIXED_BUFFER)))
     {
-      REACTIVE_FIXED_BUFFER_MODE = _wtoi(argv[1]);
+      REACTIVE_FIXED_BUFFER = _wtoi(argv[1]);
     }
-
     else if (0 == ::_wcsnicmp(argv[0], ARG_DELAY_MS, ARRAY_SIZE(ARG_DELAY_MS)))
     {
       DELAY_MS = _wtof(argv[1]);
@@ -218,6 +209,8 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_MODE, ARRAY_SIZE(ARG_LEARNING_MODE)))
     {
       LEARNING_MODE = _wtoi(argv[1]);
+      if (LEARNING_MODE != 0)
+        LEARNING = 1;
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_PRED_ONE_OVER, ARRAY_SIZE(ARG_LEARNING_PRED_ONE_OVER)))
     {
@@ -429,7 +422,7 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
           break;
         default:
           bucketIdThresh = Bucket0;
-      }        
+      }
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_PERC, ARRAY_SIZE(ARG_PERC)))
     {
@@ -447,15 +440,15 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     shift;
   }
 
-  if (LEARNING_MODE != 0 || NO_HARVESTING != 0 || REACTIVE_FIXED_BUFFER_MODE != 0)
-    FIXED_BUFFER_MODE = 0;
+  if (!LEARNING || !NO_HARVESTING || !REACTIVE_FIXED_BUFFER || !USE_PREV_PEAK)
+    FIXED_BUFFER = 0;
 
   wcout << "output_csv: " << output_csv << std::endl;
   wcout << "primaryNames: " << primaryNames << std::endl;
   wcout << "hvmNames: " << hvmNames << std::endl;
   wcout << "RUN_DURATION_SEC: " << RUN_DURATION_SEC << std::endl;
   wcout << "bufferSize: " << bufferSize << std::endl;
-  wcout << "REACTIVE_FIXED_BUFFER_MODE: " << REACTIVE_FIXED_BUFFER_MODE << std::endl;
+  wcout << "REACTIVE_FIXED_BUFFER: " << REACTIVE_FIXED_BUFFER << std::endl;
   wcout << "DELAY_MS: " << DELAY_MS << std::endl;
   wcout << "LEARNING_MODE: " << LEARNING_MODE << std::endl;
   wcout << "PRED_ONE_OVER: " << PRED_ONE_OVER << std::endl;
@@ -487,12 +480,14 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   cout << "bucketIdThresh: " << BucketIdMapA[bucketIdThresh] << std::endl;
   cout << "PERC: " << PERC << std::endl;
 
-  wcout << "FIXED_BUFFER_MODE: " << FIXED_BUFFER_MODE << std::endl;
+  wcout << "FIXED_BUFFER: " << FIXED_BUFFER << std::endl;
   wcout << "MAX_HVM_CORES: " << MAX_HVM_CORES << std::endl;
   wcout << "MIN_HVM_CORES: " << MIN_HVM_CORES << std::endl;
 }
 
-/* logging */
+/************************/
+// logging functions
+/************************/
 struct Record
 {
   int updateCount;
@@ -516,6 +511,16 @@ struct Record
   int feedback_max;
   int updateModel;
   BucketId bucketId = Bucket6;
+};
+
+struct CpuLog
+{
+  int hvmBusy;
+  int hvmCores;
+  int primaryBusy;
+  int primaryCores;
+  string primaryCoresMask;
+  string systemBusyMask;
 };
 
 struct RecordCPU
@@ -640,13 +645,6 @@ void init()
   ASSERT(SUCCEEDED(HVMAgent_InitWithMinRootMask(&cpuInfo, minRootMask)));
   std::cout << "HVMAgent initialized" << endl;
 
-  /*
-  if (cpuInfo.IsHyperThreaded)
-  {
-    PRIMARY_SIZE /= 2;
-  }
-  */
-
   ASSERT(SUCCEEDED(primary.init(mode, primaryNames, PRIMARY_SIZE, TRUE, disjointCpuGroups)));
   ASSERT(SUCCEEDED(hvm.init(mode, hvmNames, cpuInfo.NonMinRootCores - PRIMARY_SIZE, FALSE, disjointCpuGroups)));
 
@@ -654,272 +652,255 @@ void init()
   hvm.maxCores = (INT)cpuInfo.NonMinRootCores > bufferSize ? cpuInfo.NonMinRootCores - bufferSize : hvm.minCores;
 }
 
-/*
-  optional 1st arg = buffer size
-*/
-// int main(int argc, char* argv[])
+CycleCounter timer;
+void computeFeature(Feature* f, int learningWindowUs, CpuLog* log)
+{
+  high_resolution_clock::time_point tStart, tStop;
+  microseconds usElapsed;
+  UINT64 systemBusyMask;
+  INT32 primaryBusyCores, primaryCores, hvmBusyCores, hvmCores;
+  INT32 newPrimaryCores = primary.maxCores;
+  vector<int64_t> cpuBusy;  // num of busy cpu cores of primary vm --> reading every <1us
+  int sum = 0;
+  int max = 0;
+  int min = primary.maxCores;
+
+  // collect cpu data for vw learning window
+  tStart = high_resolution_clock::now();
+  while (true)
+  {
+    HVMAgent_SpinUS(read_cpu_sleep_us);
+    // read cpu usage
+    systemBusyMask = HVMAgent_BusyMaskCoresNonSMTVMs();
+    hvmBusyCores = hvm.busyCores(systemBusyMask);
+    hvmCores = hvm.curCores;
+    primaryBusyCores = primary.busyCores(systemBusyMask);
+    primaryCores = primary.curCores;
+    if (DEBUG_PEAK)
+    {
+      recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores, primaryCores};
+      ASSERT(numLogEntries < MAX_RECORDS);
+    }
+    // record cpu reading
+    cpuBusy.push_back(primaryBusyCores);
+    sum += primaryBusyCores;
+    if (primaryBusyCores < min)
+      min = primaryBusyCores;
+    if (primaryBusyCores > max)
+      max = primaryBusyCores;
+    // check time
+    tStop = high_resolution_clock::now();
+    usElapsed = duration_cast<microseconds>(tStop - tStart);
+    if (usElapsed.count() >= learningWindowUs)
+      break;  // a learning window past
+  }
+
+  // compute features
+  f->min = min;
+  f->max = max;
+  int size = cpuBusy.size();
+  f->avg = 1.0 * sum / size;
+  double tmp = 0;
+  for (int i = 0; i < size; i++)
+  {
+    tmp += (cpuBusy[i] - f->avg) * (cpuBusy[i] - f->avg);
+  }
+  tmp = 1.0 * tmp / size;
+  f->stddev = sqrt(tmp);
+  std::sort(cpuBusy.begin(), cpuBusy.end());
+  if (size % 2 != 0)
+    f->med = cpuBusy[size / 2];
+  else
+    f->med = (cpuBusy[(size - 1) / 2] + cpuBusy[size / 2]) / 2.0;
+
+  log->hvmBusy = hvmBusyCores;
+  log->hvmCores = hvmCores;
+  log->primaryBusy = primaryBusyCores;
+  log->primaryCores = primaryCores;
+  log->primaryCoresMask = bitset<64>(primary.masks[primaryCores]).to_string();
+  log->systemBusyMask = bitset<64>(systemBusyMask).to_string();
+}
+
+string getVWFeature(Feature* f) { return f->vwString(); }
+
+string getVWLabel(int cpuPeakObserved)
+{
+  int cost;
+  string vwLabel;
+  int correctClass = cpuPeakObserved;
+
+  switch (LEARNING_ALGO)
+  {
+    case CSOAA:
+      if (COST_FUNCTION == 0)
+      {
+        for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
+        {
+          if (k < correctClass)
+            cost = correctClass - k + primary.maxCores;  // underprediction (worse --> higher cost)
+          else
+            cost = k - correctClass;  // prefect- & over-prediction
+          vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
+        }
+      }
+      if (COST_FUNCTION == 1)  // symmetric cost
+      {
+        for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
+        {
+          if (k < correctClass)
+            cost = correctClass - k;  // underprediction (worse --> higher cost)
+          else
+            cost = k - correctClass;  // prefect- & over-prediction
+          vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
+        }
+      }
+      if (COST_FUNCTION == 2)  // hinged cost
+      {
+        for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
+        {
+          if (k < correctClass)
+            cost = correctClass - k;  // underprediction (worse --> higher cost)
+          else
+            cost = 0;  // prefect- & over-prediction
+          vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
+        }
+      }
+      if (COST_FUNCTION == 3)  // max + 1
+      {
+        correctClass = std::min(correctClass + 1, (INT32)primary.maxCores);
+        for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
+        {
+          if (k < correctClass)
+            cost = correctClass - k + primary.maxCores;  // underprediction (worse --> higher cost)
+          else
+            cost = k - correctClass;  // prefect- & over-prediction
+          vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
+        }
+      }
+      break;
+    case REG:
+      vwLabel = std::to_string(correctClass) + " ";
+      break;
+    default:
+      std::cout << "EXIT: No learning algorithm specified." << endl;
+      std::exit(1);
+  }
+
+  return vwLabel;
+}
+
+/************************/
+// main function
+/************************/
 int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 {
   verbose = FALSE;
   process_args(argc, argv);
-  int sleep_us = (int)SLEEP_MS * 1000;
 
-  /************************/
-  // initialize HVM agent
-  /************************/
-  init();
+  vector<int64_t> feature_compute_us, model_update_us, model_inference_us;
+  high_resolution_clock::time_point start, stop, learnStart, learnStop;
+  microseconds duration;
 
-  time_t now = time(0);
-  char* dt = ctime(&now);
-  // cout << "HVM agent initialized: " << dt << endl;
-
-  /************************/
-  // VW learning agent
-  /************************/
-  // initilize vw features
-  size_t size;                 // 10 * 1000 / 50 = 200 readings per 10ms
-  vector<int64_t> cpu_busy_a;  // num of busy cpu cores of primary vm --> reading every <1us
-  vector<int64_t> cpu_busy_b;
-  vector<int64_t> time_b;
-  vector<int64_t> feature_compute_us;
-  vector<int64_t> model_update_us;
-  vector<int64_t> model_inference_us;
-  vector<int64_t> read_primary_cpu_us;
-  vector<int64_t> log_primary_cpu_us;
-
-  int invoke_learning = 0;
-  int first_window = 1;
-  int learning_us = LEARNING_MS * 1000;
-  int feedback_us = FEEDBACK_MS * 1000;
-  int check_dispatch_us = CHECK_DISPATCH_MS * 1000;
-  int reenable_harvest_us = REENABLE_HARVEST_SEC * 1000 * 1000;
-
-  int count = 0;
-  int sum = 0;
-  int max = 0;
-  int feedback_max = 0;
-  int min = primary.maxCores;
-  double med = 0;
-  double stddev = 0;
-  double avg = 0;
-  string feature;
-  int cpu_max_observed;
-  int correct_class;
-
-  int pred = 0;
-  int pred_alloc = 0;
-  int cost;
-  int overpredicted = 1;
-  int prevOverpredicted = 1;
-  int safeguard = 0;
-  int prevSafeguard = 0;
-  int updateModel = 0;
-  BucketId bucketId = BucketX7;
-  BucketId bucketIdPrev = BucketX7;
-
-
-  int buffer_empty_consecutive_count = 0;
-  // initialize vw
-  // use csoaa
-  // use cb
-  vw* vw;
-  switch (LEARNING_ALGO)
-  {
-    case CSOAA:
-      vw = VW::initialize("--csoaa " + to_string(primary.maxCores) + " --power_t 0 -l " + to_string(LEARNING_RATE));
-      std::cout << "csoaa: vw initialized with " << primary.maxCores << " classes." << endl;
-      break;
-    case REG:
-      vw = VW::initialize(" --power_t 0 -l 0.1");
-      std::cout << "linear regression" << endl;
-      break;
-    case CBANDIT:
-      // TODO
-      /*
-      vw = VW::initialize("--cb_explore " + to_string(primary.maxCores) + " --power_t 0 -l 0.1");
-      std::cout << "cb: vw initialized with " << primary.maxCores << " classes." << endl;
-      */
-      break;
-    default:
-      cout << "EXIT: No learning algorithm specified." << endl;
-      exit(1);
-  }
-
-  string vwLabel, vwFeature, vwMsg;
-  example* ex;
-  example* ex_pred;
-
-  /************************/
-  // learning tweaks
-  /************************/
-  int use_curr_busy = 1;
-  std::cout << "************************" << endl;
-  std::cout << "always update learning model" << endl;
-  std::cout << "update under-predictions with (correct_label = observed_peak+1)" << endl;
-  if (use_curr_busy)
-    std::cout << "use current busy" << endl;
-  else
-    std::cout << "use max from previous window" << endl;
-  std::cout << "************************" << endl;
-
-  int stop_harvest = 0;
-  int reset = 0;
-  if (DISABLE_HARVEST)
-    std::cout << "harvesting can be disabled (if p"<< PERC << " vcpu dispatch wait time lies in bucket >= " << BucketIdMapA[bucketIdThresh] << ")" << endl;
-  else
-    std::cout << "harvesting cannot be disabled" << endl;
-
-  /************************/
-  // set up latency measurements
-  /************************/
-  auto start = high_resolution_clock::now();
-  auto stop = high_resolution_clock::now();
-  auto learn_start = high_resolution_clock::now();
-  auto learn_stop = high_resolution_clock::now();
-  auto feedback_start = high_resolution_clock::now();
-  auto feedback_stop = high_resolution_clock::now();
-  auto check_dispatch_start = high_resolution_clock::now();
-  auto check_dispatch_stop = high_resolution_clock::now();
-  auto reenable_harvest_start = high_resolution_clock::now();
-  auto reenable_harvest_stop = high_resolution_clock::now();
-  auto duration = duration_cast<microseconds>(stop - start);
-  auto us_elapsed = duration_cast<microseconds>(stop - start);
-  // auto time_data_collection, time_feature_computation, time_model_udpate, time_model_inference, time_cpugroup_update;
-
-  int delay_us;
-  delay_us = (int)(DELAY_MS * 1000);
-
-  /************************/
-  // main loop
-  /************************/
-  int first_iter = 1;
-  int newPrimaryCoresPrev = 0;
-
-  int debug_count = 0;
-  auto start_1min = high_resolution_clock::now();
-
-  CycleCounter timer;
-  timer.Start();
   UINT64 systemBusyMask;
   INT32 primaryBusyCores, primaryCores, hvmBusyCores, hvmCores;
   INT32 newPrimaryCores = primary.maxCores;
+  struct CpuLog log;
+  struct CpuLog* l = &log;
 
+  int cpuPeakObserved, predPeak, overPredicted, invokeLearning, invokeSafeguard;
+  string vwLabel, vwFeature, vwMsg;
+  Feature feature;
+  Feature* f = &feature;
+
+  int delayUs = (int)(DELAY_MS * 1000);
+  int sleepUs = (int)SLEEP_MS * 1000;
+  int learningWindowUs = LEARNING_MS * 1000;
+  int firstWindow = 1;
+  int newPrimaryCoresPrev = 0;
+  int count = 0;
+  int debugCount = 0;
+
+  // initialize variables for global safeguard
+  high_resolution_clock::time_point checkDispatchStart, checkDispatchStop;
+  high_resolution_clock::time_point reenableHarvestStart, reenableHarvestStop;
+  microseconds usElapsed;
+  int stopHarvest = 0;
+  int reset = 0;
+  int checkDispatchUs = CHECK_DISPATCH_MS * 1000;
+  int reenableHarvestUs = REENABLE_HARVEST_SEC * 1000 * 1000;
+  BucketId bucketId = BucketX7;
+  BucketId bucketIdPrev = BucketX7;
+  if (DISABLE_HARVEST)
+    std::cout << "harvesting can be disabled (if p" << PERC
+              << " vcpu dispatch wait time lies in bucket >= " << BucketIdMapA[bucketIdThresh] << ")" << endl;
+  else
+    std::cout << "harvesting cannot be disabled" << endl;
+
+
+  // initialize HVM agent
+  init();
+  time_t now = time(0);
+  char* dt = ctime(&now);
+  cout << "HVM agent initialized: " << dt << endl;
+
+
+  // initialize vw learning
+  ASSERT(SUCCEEDED(modelInit(LEARNING_ALGO, primary.maxCores, LEARNING_RATE)));
+
+
+  // main loop
   now = time(0);
   dt = ctime(&now);
   std::cout << "HVM agent starting: " << dt << endl;
-
+  timer.Start();
   while (timer.ElapsedSeconds() < RUN_DURATION_SEC)
   {
-    debug_count++;
-    if (DEBUG && debug_count > 6)
+    debugCount++;
+    if (DEBUG && debugCount > 6)
       break;
 
-    // reenable harvesting (if it was disabled) every reenable_harvest_us
-    if (stop_harvest)
+    // reenable harvesting (if it was disabled) every reenableHarvestUs
+    if (stopHarvest)
     {
-      reenable_harvest_stop = high_resolution_clock::now();
-      us_elapsed = duration_cast<microseconds>(reenable_harvest_stop - reenable_harvest_start);
-      if (us_elapsed.count() >= reenable_harvest_us)
+      reenableHarvestStop = high_resolution_clock::now();
+      usElapsed = duration_cast<microseconds>(reenableHarvestStop - reenableHarvestStart);
+      if (usElapsed.count() >= reenableHarvestUs)
       {
-        stop_harvest = 0;
+        stopHarvest = 0;
         reset = 0;
         std::cout << "ON" << endl;
         if (REENABLE_HARVEST_PERIODIC)
-          reenable_harvest_start = high_resolution_clock::now();
+          reenableHarvestStart = high_resolution_clock::now();
       }
     }
 
-    // check for vcpu wait time every check_dispatch_us
-    check_dispatch_stop = high_resolution_clock::now();
-    us_elapsed = duration_cast<microseconds>(check_dispatch_stop - check_dispatch_start);
-    if (us_elapsed.count() >= check_dispatch_us)
+    // check for vcpu wait time every checkDispatchUs
+    checkDispatchStop = high_resolution_clock::now();
+    usElapsed = duration_cast<microseconds>(checkDispatchStop - checkDispatchStart);
+    if (usElapsed.count() >= checkDispatchUs)
     {
       std::cout << timer.ElapsedUS() / 1000000.0 << " sec elapsed;\t";
       bucketId = primary.GetCpuWaitTimePercentileBucketId(PERC);
-      if (DISABLE_HARVEST && !first_iter)  // harvesting allowed to be disabled
+      if (DISABLE_HARVEST && !firstWindow)  // harvesting allowed to be disabled
       {
         if (bucketId >= bucketIdThresh && bucketIdPrev >= bucketIdThresh)
         {
           // wait time too long--> disable harvesting
-          stop_harvest = 1;
+          stopHarvest = 1;
           std::cout << "OFF" << endl;
           if (!REENABLE_HARVEST_PERIODIC)
-            reenable_harvest_start = high_resolution_clock::now();
+            checkDispatchStart = high_resolution_clock::now();
         }
         bucketIdPrev = bucketId;
       }
-      check_dispatch_start = high_resolution_clock::now();
-      first_iter = 0;
+      checkDispatchStart = high_resolution_clock::now();
     }
 
-    if (USE_PREV_PEAK)
-    {
-      start = high_resolution_clock::now();
-      max = 0;  // reset max
-
-      while (true)
-      {
-        HVMAgent_SpinUS(read_cpu_sleep_us);
-
-        systemBusyMask = HVMAgent_BusyMaskCoresNonSMTVMs();
-        hvmBusyCores = hvm.busyCores(systemBusyMask);
-        hvmCores = hvm.curCores;
-        primaryBusyCores = primary.busyCores(systemBusyMask);
-        primaryCores = primary.curCores;
-
-        if (primaryBusyCores > max)
-          max = primaryBusyCores;
-
-        if (DEBUG_PEAK)
-        {
-          recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores, primaryCores};
-          ASSERT(numLogEntries < MAX_RECORDS);
-        }
-
-        stop = high_resolution_clock::now();
-        us_elapsed = duration_cast<microseconds>(stop - start);
-        if (us_elapsed.count() >= learning_us)
-          break;  // log max from every 2ms
-      }
-
-      if (max == newPrimaryCores)
-        newPrimaryCores = std::min(max + 1, (int)primary.maxCores);  // increase vm size by one
-      else
-        newPrimaryCores = max;
-
-      if (LOGGING)
-      {
-        records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-            primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-            0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
-        ASSERT(numLogEntries < MAX_RECORDS);
-      }
-      if (stop_harvest)
-      {
-        if (!reset)
-        {
-          updateCores(PRIMARY_SIZE, systemBusyMask);
-          HVMAgent_SpinUS(sleep_us);
-          reset = 1;
-        }
-      }
-      else
-      {
-        // update hvm size
-        if (newPrimaryCores != primary.curCores)
-        {
-          updateCores(newPrimaryCores, systemBusyMask);
-          HVMAgent_SpinUS(sleep_us);
-          count++;
-        }
-      }
-    }
-
-
+    // policy 1: no harvesting
     if (NO_HARVESTING)
     {
       start = high_resolution_clock::now();
-      max = 0;  // reset max
+      cpuPeakObserved = 0;  // reset max
 
       while (true)
       {
@@ -931,8 +912,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         primaryBusyCores = primary.busyCores(systemBusyMask);
         primaryCores = primary.curCores;
 
-        if (primaryBusyCores > max)
-          max = primaryBusyCores;
+        if (primaryBusyCores > cpuPeakObserved)
+          cpuPeakObserved = primaryBusyCores;
 
         if (DEBUG_PEAK)
         {
@@ -941,8 +922,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
 
         stop = high_resolution_clock::now();
-        us_elapsed = duration_cast<microseconds>(stop - start);
-        if (us_elapsed.count() >= learning_us)
+        usElapsed = duration_cast<microseconds>(stop - start);
+        if (usElapsed.count() >= learningWindowUs)
           break;  // log max from every 2ms
       }
 
@@ -951,16 +932,16 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
         records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
             primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-            0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
+            0, 0, 0, 0, 0, 0, newPrimaryCores, cpuPeakObserved, 0, 0, 0, 0, bucketId};
         ASSERT(numLogEntries < MAX_RECORDS);
       }
     }
 
-
-    else if (FIXED_BUFFER_MODE)
+    // policy 2: fixed buffer
+    if (FIXED_BUFFER)
     {
       start = high_resolution_clock::now();
-      max = 0;  // reset max
+      cpuPeakObserved = 0;  // reset max
 
       if (DEBUG)
         cout << "fixed buffer mode" << endl;
@@ -975,27 +956,27 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         primaryBusyCores = primary.busyCores(systemBusyMask);
         primaryCores = primary.curCores;
 
-        if (primaryBusyCores > max)
-          max = primaryBusyCores;
+        if (primaryBusyCores > cpuPeakObserved)
+          cpuPeakObserved = primaryBusyCores;
 
         stop = high_resolution_clock::now();
-        us_elapsed = duration_cast<microseconds>(stop - start);
-        if (us_elapsed.count() >= delay_us)
-          break;  // log max from delay_us
+        usElapsed = duration_cast<microseconds>(stop - start);
+        if (usElapsed.count() >= delayUs)
+          break;  // log max from delayUs
       }
 
       newPrimaryCores = std::min(primaryBusyCores + bufferSize, (INT32)primary.maxCores);  // re-compute primary size
 
-      //bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
+      // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
           primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(), 0,
-          0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
+          0, 0, 0, 0, 0, newPrimaryCores, cpuPeakObserved, 0, 0, 0, 0, bucketId};
       ASSERT(numLogEntries < MAX_RECORDS);
 
       if (newPrimaryCores != primary.curCores)
       {
         updateCores(newPrimaryCores, systemBusyMask);
-        HVMAgent_SpinUS(sleep_us);  // sleep for 1ms for cpu affinity call (if issued) to take effects
+        HVMAgent_SpinUS(sleepUs);  // sleep for 1ms for cpu affinity call (if issued) to take effects
         count++;
       }
 
@@ -1006,31 +987,15 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
     }
 
-
-    else
+    // policy 3: heuristic based on peak from previous window
+    if (USE_PREV_PEAK)
     {
-      learn_start = high_resolution_clock::now();
-      feedback_start = high_resolution_clock::now();
+      start = high_resolution_clock::now();
+      cpuPeakObserved = 0;  // reset max
 
-      // resetting parameters
-      overpredicted = 1;
-      safeguard = 0;
-      updateModel = 0;
-      sum = 0;
-      size = 0;
-      // count = 0;
-      max = 0;
-      min = primary.maxCores;
-      cpu_busy_a.clear();
-      invoke_learning = 0;
-
-      /* collect cpu data for vw learning window */
       while (true)
       {
         HVMAgent_SpinUS(read_cpu_sleep_us);
-
-        if (TIMING)
-          start = high_resolution_clock::now();
 
         systemBusyMask = HVMAgent_BusyMaskCoresNonSMTVMs();
         hvmBusyCores = hvm.busyCores(systemBusyMask);
@@ -1038,502 +1003,192 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         primaryBusyCores = primary.busyCores(systemBusyMask);
         primaryCores = primary.curCores;
 
+        if (primaryBusyCores > cpuPeakObserved)
+          cpuPeakObserved = primaryBusyCores;
+
         if (DEBUG_PEAK)
         {
           recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores, primaryCores};
           ASSERT(numLogEntries < MAX_RECORDS);
         }
 
-        if (TIMING)
-        {
-          stop = high_resolution_clock::now();
-          duration = duration_cast<microseconds>(stop - start);
-          read_primary_cpu_us.push_back((int)duration.count());
-          start = high_resolution_clock::now();
-        }
-
-        // record cpu reading
-        cpu_busy_a.push_back(primaryBusyCores);
-        sum += primaryBusyCores;
-        if (primaryBusyCores < min)
-          min = primaryBusyCores;
-        if (primaryBusyCores > max)
-          max = primaryBusyCores;
-        if (primaryBusyCores > feedback_max)
-          feedback_max = primaryBusyCores;
-
-        // check for underprediction (buffer empty)
-        if (LEARNING_MODE == 3 || LEARNING_MODE == 4)
-        {
-          if (primaryBusyCores == primary.curCores && primary.curCores != primary.maxCores)
-          {
-            // buffer runs out (underprediction) --> trigger immediate safeguard
-            overpredicted = 0;
-            safeguard = 1;
-            if (LEARNING_MODE == 4)
-              break;  // stop data collection immediately for mode 4
-
-            // give all cores back to primary for mode3
-            newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
-
-            // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
-            records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-                primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel,
-                bucketId};
-            ASSERT(numLogEntries < MAX_RECORDS);
-
-            if (newPrimaryCores != primary.curCores)
-            {
-              // cout << "safeguard1" << endl;
-              updateCores(newPrimaryCores, systemBusyMask);
-              HVMAgent_SpinUS(sleep_us);
-              count++;
-            }
-          }
-        }
-
-        // feedback loop
-        if (FEEDBACK)
-        {
-          feedback_stop = high_resolution_clock::now();
-          us_elapsed = duration_cast<microseconds>(feedback_stop - feedback_start);
-          if (us_elapsed.count() >= feedback_us)
-          {  // trigger feedback
-            if (feedback_max == primary.curCores && primary.curCores != primary.maxCores)
-            {
-              // underpred: increase cores for primary
-              overpredicted = 0;
-              newPrimaryCores = primary.curCores * 2;
-            }
-            else
-            {
-              overpredicted = 1;
-              newPrimaryCores = primary.curCores - 1;
-            }
-
-            // adjust primary size
-            newPrimaryCores = std::min(newPrimaryCores, (INT32)primary.maxCores);
-            // newPrimaryCores = std::max(newPrimaryCores, pred);
-
-            // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
-            records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-                primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel,
-                bucketId};
-            ASSERT(numLogEntries < MAX_RECORDS);
-
-            if (stop_harvest)
-            {
-              if (!reset)
-              {
-                updateCores(PRIMARY_SIZE, systemBusyMask);
-                HVMAgent_SpinUS(sleep_us);
-                reset = 1;
-              }
-            }
-            else
-            {
-              // update hvm size
-              if (newPrimaryCores != primary.curCores)
-              {
-                // cout << "safeguard1" << endl;
-                updateCores(newPrimaryCores, systemBusyMask);
-                HVMAgent_SpinUS(sleep_us);
-                count++;
-              }
-            }
-
-            // resetting for the smaller feedback window
-            feedback_max = 0;
-            feedback_start = high_resolution_clock::now();
-          }
-        }
-
-        if (TIMING)
-        {
-          stop = high_resolution_clock::now();
-          duration = duration_cast<microseconds>(stop - start);
-          log_primary_cpu_us.push_back((int)duration.count());
-          start = high_resolution_clock::now();
-        }
-
-        learn_stop = high_resolution_clock::now();
-        us_elapsed = duration_cast<microseconds>(learn_stop - learn_start);
-        if (us_elapsed.count() >= learning_us)
-          break;  // a learning window past
+        stop = high_resolution_clock::now();
+        usElapsed = duration_cast<microseconds>(stop - start);
+        if (usElapsed.count() >= learningWindowUs)
+          break;  // log max from every 2ms
       }
 
-      /****** completed data collection window ******/
-
-      /****** compute features ******/
-      start = high_resolution_clock::now();
-      size = cpu_busy_a.size();
-      avg = 1.0 * sum / size;
-      // compute stddev
-      double tmp_sum = 0;
-      for (int i = 0; i < size; i++)
-      {
-        tmp_sum += (cpu_busy_a[i] - avg) * (cpu_busy_a[i] - avg);
-      }
-      tmp_sum = 1.0 * tmp_sum / size;
-      stddev = sqrt(tmp_sum);
-      // compute median
-      std::sort(cpu_busy_a.begin(), cpu_busy_a.end());
-      if (size % 2 != 0)
-        med = cpu_busy_a[size / 2];
+      if (cpuPeakObserved == newPrimaryCores)
+        newPrimaryCores = std::min(cpuPeakObserved + 1, (int)primary.maxCores);  // increase vm size by one
       else
-        med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2.0;
+        newPrimaryCores = cpuPeakObserved;
 
-      cpu_max_observed = max;
-      if (LEARNING_MODE == 7)
+      if (LOGGING)
       {
-        min = 1;
-        max = 1;
-        avg = 1;
-        stddev = 1;
-        med = 1;
+        records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+            primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
+            0, 0, 0, 0, 0, 0, newPrimaryCores, cpuPeakObserved, 0, 0, 0, 0, bucketId};
+        ASSERT(numLogEntries < MAX_RECORDS);
       }
-      if (FLAT_USAGE)
+      if (stopHarvest)
       {
-        min = 3;
-        max = 3;
-        avg = 3;
-        stddev = 0;
-        med = 3;
+        if (!reset)
+        {
+          updateCores(PRIMARY_SIZE, systemBusyMask);
+          HVMAgent_SpinUS(sleepUs);
+          reset = 1;
+        }
       }
+      else
+      {
+        // update hvm size
+        if (newPrimaryCores != primary.curCores)
+        {
+          updateCores(newPrimaryCores, systemBusyMask);
+          HVMAgent_SpinUS(sleepUs);
+          count++;
+        }
+      }
+    }
+
+    // policy 4: learning
+    if (LEARNING)
+    {
+      if (DEBUG)
+        std::cout << "Using vw learning" << endl;
+
+      // resetting parameters
+      overPredicted = 1;
+      invokeLearning = 1;
+      invokeSafeguard = 0;
+      learnStart = high_resolution_clock::now();
+
+      // compute features
+      start = high_resolution_clock::now();
+      computeFeature(f, learningWindowUs, l);
+      cpuPeakObserved = f->max;
+      if (DEBUG)
+        std::cout << "retured from computefeature" << endl;
 
       if (TIMING)
       {
         stop = high_resolution_clock::now();
         duration = duration_cast<microseconds>(stop - start);
-        // std::cout << duration.count() << endl;
-        // time_feature_computation = duration_cast<microseconds>(stop - start);
-        // std::cout << "time_feature_computation (us) " << duration.count() << endl;
         feature_compute_us.push_back(duration.count());
       }
 
-      /****** compute CPU affinity ******/
-      if (first_window)
+      // set CPU affinity
+      if (firstWindow)
       {
         // first iteration gives all cores to primary VM
-        if (DEBUG)
-          std::cout << "Using vw learning" << endl;
-        first_window = 0;
-
         newPrimaryCores = primary.maxCores;
         newPrimaryCoresPrev = newPrimaryCores;
-        /* construct features for model update */
-        vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
-            " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
+        vwFeature = getVWFeature(f);
       }
       else
       {
         start = high_resolution_clock::now();
 
-        if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 ||
-            LEARNING_MODE == 8 || LEARNING_MODE == 9 || LEARNING_MODE == 10 || LEARNING_MODE == 11)
-        {  // mode 1&2 need to decide overprediction here
-          if (max < (INT32)primary.curCores || primary.curCores == primary.maxCores)
-            overpredicted = 1;
+        if (LEARNING_MODE == 1 || LEARNING_MODE == 2 || LEARNING_MODE == 5)
+        {  // decide if overpredicted
+          if (cpuPeakObserved < (INT32)primary.curCores || primary.curCores == primary.maxCores)
+            overPredicted = 1;
           else
-            overpredicted = 0;
+            overPredicted = 0;
 
           if (NO_PRED)
           {
-            if (max < pred_alloc || pred_alloc == primary.maxCores)
-              overpredicted = 1;
+            if (cpuPeakObserved < newPrimaryCores || newPrimaryCores == primary.maxCores)
+              overPredicted = 1;
             else
-              overpredicted = 0;
+              overPredicted = 0;
           }
         }
 
-        if (LEARNING_MODE == 6)
+        if (LEARNING_MODE == 2 || LEARNING_MODE == 5)
         {
-          if (max < (INT32)primary.curCores || primary.curCores == primary.maxCores)
+          // mode 2&5 can trigger safeguard
+          if (!overPredicted)
           {
-            overpredicted = 1;
-            buffer_empty_consecutive_count = 0;
-          }
-          else
-          {
-            overpredicted = 0;
-            buffer_empty_consecutive_count += 1;
+            invokeLearning = 0;
+            invokeSafeguard = 1;
           }
         }
 
-        if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 8 || LEARNING_MODE == 9)
+        if (invokeLearning)
         {
-          // mode 1 always relies on predictions
-          invoke_learning = 1;
-          safeguard = 0;
-        }
-        else if (LEARNING_MODE == 6)
-        {
-          // mode 6 triggers safeguard/exploration if buffer empty for 3 past consecutive intervals
-          if (buffer_empty_consecutive_count == 3)
+          // construct vw label
+          vwLabel.clear();
+          vwLabel = getVWLabel(cpuPeakObserved);
+          // update model
+          if (DEBUG)
           {
-            invoke_learning = 0;
-            safeguard = 1;
-            buffer_empty_consecutive_count = 0;
+            std::cout << "vwLabel to update model: " << vwLabel.c_str() << endl;
+            std::cout << "vwFeature to update model: " << vwFeature.c_str() << endl;
           }
-          else
-          {
-            invoke_learning = 1;
-            safeguard = 0;
-          }
-        }
-        else
-        {
-          // mode 2&3&4&5&8&9 can trigger safeguard
-          if (overpredicted)
-          {
-            invoke_learning = 1;
-            safeguard = 0;
-          }
-          else
-          {
-            invoke_learning = 0;
-            safeguard = 1;
-          }
-        }
+          ASSERT(SUCCEEDED(modelUpdate(vwLabel, vwFeature)));
 
-        if (DEBUG)
-          cout << "invoke_learning: " << invoke_learning << " safeguard:" << safeguard << endl;
-
-        // invoke_learning = 1;
-        if (invoke_learning)
-        {  // use model prediction for next window only if overpredicted from the previous window
-          // if (dropBadFeatures && prevSafeguard)
-          //{
-          // don't update the model
-          // int update_model = 0;
-          //}
-          if (!dropBadFeatures || prevOverpredicted)
-          {
-            updateModel = 1;
-            // update model if (NOT drop bad features) or (previous window buffer NOT empty) ==> not(drop bad features
-            // and previous window buffer empty)
-            /* create cost label */
-            vwLabel.clear();
-
-            /*
-            if (safeguard || PRED_ONE_OVER || ((LEARNING_MODE == 1 && !overpredicted)))
-              correct_class = std::min(max + 1, (INT32)primary.maxCores);
-            else
-              correct_class = max;
-            */
-            // correct_class = max;
-            cpu_max_observed = max;
-            correct_class = cpu_max_observed;
-            // if (NO_PRED && LEARNING_MODE == 5)
-            //  correct_class = std::min(max, newPrimaryCores);
-
-            switch (LEARNING_ALGO)
-            {
-              case CSOAA:
-                if (COST_FUNCTION == 0)
-                {
-                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
-                  {
-                    if (k < correct_class)
-                      cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
-                    else
-                      cost = k - correct_class;  // prefect- & over-prediction
-                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
-                  }
-                }
-                if (COST_FUNCTION == 1)  // symmetric cost
-                {
-                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
-                  {
-                    if (k < correct_class)
-                      cost = correct_class - k;  // underprediction (worse --> higher cost)
-                    else
-                      cost = k - correct_class;  // prefect- & over-prediction
-                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
-                  }
-                }
-                if (COST_FUNCTION == 2)  // hedge cost
-                {
-                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
-                  {
-                    if (k < correct_class)
-                      cost = correct_class - k;  // underprediction (worse --> higher cost)
-                    else
-                      cost = 0;  // prefect- & over-prediction
-                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
-                  }
-                }
-                if (COST_FUNCTION == 3)  // max + 1
-                {
-                  correct_class = std::min(max + 1, (INT32)primary.maxCores);
-                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
-                  {
-                    if (k < correct_class)
-                      cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
-                    else
-                      cost = k - correct_class;  // prefect- & over-prediction
-                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
-                  }
-                }
-                break;
-              case REG:
-                vwLabel = std::to_string(cpu_max_observed) + " ";
-                break;
-              case CBANDIT:
-                // TODO
-                /*
-                int k = newPrimaryCores;
-                if (k < correct_class)
-                  cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
-                else
-                  cost = k - correct_class;  // prefect- & over-prediction
-                vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
-                */
-                break;
-              default:
-                std::cout << "EXIT: No learning algorithm specified." << endl;
-                std::exit(1);
-            }
-
-            /* create vw training data */
-            // vwLabel = "1:3 2:0 3:1";
-            vwMsg = vwLabel + vwFeature;  // vwLabel from current window, features generated from previous window
-            ex = VW::read_example(*vw, vwMsg.c_str());  // update vw model with features from previous window
-            if (DEBUG)
-              std::cout << "vwMsg to update model: " << vwMsg.c_str() << endl;
-            // example* ex = VW::read_example(*vw, "1:3 2:0 3:-1 |busy_cores_prev_interval min:0 max:0 avg:0 stddev:0
-            // med:0");
-
-            /* udpate vw model */
-            vw->learn(*ex);
-            VW::finish_example(*vw, *ex);
-          }
           if (TIMING)
           {
             stop = high_resolution_clock::now();
             duration = duration_cast<microseconds>(stop - start);
-            // std::cout << duration.count() << endl;
-            // time_model_udpate = duration_cast<microseconds>(stop - start);
-            // std::cout << "time_model_udpate (us) " << duration.count() << endl;
             model_update_us.push_back(duration.count());
             start = high_resolution_clock::now();
           }
 
-          /* construct features for prediction */
-          vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
-              " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
-          if (DEBUG)
-            std::cout << "vwFeature: " << vwFeature.c_str() << endl;
-          ex_pred = VW::read_example(*vw, vwFeature.c_str());
-
-          /* get prediction --> # cores to primary VM */
-          vw->predict(*ex_pred);
-
-          switch (LEARNING_ALGO)
-          {
-            case CSOAA:
-              pred = (int)VW::get_cost_sensitive_prediction(ex_pred);
-              break;
-            case REG:
-              pred = (int)ceil(VW::get_prediction(ex_pred));
-              break;
-            case CBANDIT:
-              // TODO
-              break;
-            default:
-              std::cout << "EXIT: No learning algorithm specified." << endl;
-              std::exit(1);
-          }
-
-          if (DEBUG)
-            std::cout << "pred = " << pred << endl;
-          VW::finish_example(*vw, *ex_pred);
-
-          // read current busy status?
-          if (use_curr_busy)
-            newPrimaryCores = std::min(std::max(pred, primaryBusyCores + 1),
-                (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
-          else
-            newPrimaryCores = std::min(std::max(pred, cpu_max_observed + 1),
-                (INT32)primary.maxCores);  // keep at least 1 core in addition to max from the past window
+          // predict cpu peak for next learning window
+          vwFeature = getVWFeature(f);
+          predPeak = (int)ceil(modelPredict(LEARNING_ALGO, vwFeature));
+          // compute new core assignment (keep at least 1 core in addition to current # cores used by primary VM)
+          newPrimaryCores = std::min(std::max(predPeak, primaryBusyCores + 1), (INT32)primary.maxCores);
 
           if (PRED_PLUS_ONE)
-            newPrimaryCores = std::min(std::max(pred + PRED_PLUS_OFFSET, primaryBusyCores + 1),
-                (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
-
-          if (LEARNING_MODE == 8 || LEARNING_MODE == 10)
-          {
-            newPrimaryCores = std::min(std::max(pred + 1, primaryBusyCores + 1), (INT32)primary.maxCores);
-            if (DEBUG)
-              std::cout << "<debug> newPrimaryCores: " << newPrimaryCores << ",  primary.maxCores: " << primary.maxCores
-                        << ",  pred: " << pred << endl;
-          }
-
+            newPrimaryCores =
+                std::min(std::max(predPeak + PRED_PLUS_OFFSET, primaryBusyCores + 1), (INT32)primary.maxCores);
           if (TIMING)
           {
             stop = high_resolution_clock::now();
             duration = duration_cast<microseconds>(stop - start);
-            // std::cout << duration.count() << endl;
-            // time_model_inference = duration_cast<microseconds>(stop - start);
-            // std::cout << "time_model_inference (us) " << duration.count() << endl;
             model_inference_us.push_back(duration.count());
             start = high_resolution_clock::now();
           }
-
-          // cout << "numPrimaryCores: " << numPrimaryCoresPrev << " --> " << numPrimaryCores << "  hvm.curCores" <<
-          // hvm.curCoresPrev << " --> " << hvm.curCores << endl;
         }
 
-        if (safeguard)
+        if (invokeSafeguard)
         {
-          // under-prediction
-          pred = 0;
-          if (DEBUG)
-            std::cout << "UNDER-PREDICTION" << endl;
+          predPeak = 0;
           newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
-
-          if (LEARNING_MODE == 5)
-          {
-            // mode 5 uses less aggressive safeguard
+          if (LEARNING_MODE == 5)              // mode 5 uses less aggressive safeguard
             newPrimaryCores = std::min(primary.maxCores, primary.curCores * 2);
-          }
-
           if (NO_PRED && LEARNING_MODE == 5)
             newPrimaryCores = std::min((INT32)primary.maxCores, newPrimaryCoresPrev * 2);
-          // safeguard = 1;
         }
       }
 
-      // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
-      records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-          min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, feedback_max,
-          updateModel, bucketId};
+      records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, l->hvmBusy, l->hvmCores, l->primaryBusy,
+          l->primaryCores, l->primaryCoresMask, l->systemBusyMask, f->min, f->max, f->avg, f->stddev, f->med, predPeak,
+          newPrimaryCores, cpuPeakObserved, overPredicted, invokeSafeguard, cpuPeakObserved, invokeLearning, bucketId};
 
-      /****** update CPU affinity ******/
+      // update core assignment
       if (NO_PRED)
       {
-        pred_alloc = newPrimaryCores;
-        // newPrimaryCores = primary.maxCores;
         if (LEARNING_MODE == 5)
         {
           if (newPrimaryCores != newPrimaryCoresPrev)
-            HVMAgent_SpinUS(sleep_us);
+            HVMAgent_SpinUS(sleepUs);
           newPrimaryCoresPrev = newPrimaryCores;
         }
       }
       else
       {
-        if (stop_harvest)
+        if (stopHarvest)
         {
           if (!reset)
           {
             if (PRIMARY_SIZE != primary.curCores)
             {
               updateCores(PRIMARY_SIZE, systemBusyMask);
-              HVMAgent_SpinUS(sleep_us);
+              HVMAgent_SpinUS(sleepUs);
             }
             reset = 1;
           }
@@ -1542,26 +1197,21 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         {
           if (newPrimaryCores != primary.curCores)
           {
-            if (DEBUG)
-              std::cout << "<debug> newPrimaryCores = " << newPrimaryCores << endl;
             updateCores(newPrimaryCores, systemBusyMask);
-            // printf("called update: primary.curMask=0x%x\n", primary.curMask);
 
-            HVMAgent_SpinUS(sleep_us);
+            HVMAgent_SpinUS(sleepUs);
             count++;
           }
           else
           {
             if (FIXED_DELAY)
-              HVMAgent_SpinUS(sleep_us);
+              HVMAgent_SpinUS(sleepUs);
           }
         }
       }
 
+      firstWindow = 0;
       ASSERT(numLogEntries < MAX_RECORDS);
-
-      // prevSafeguard = safeguard; //only workds for mode 2-4
-      prevOverpredicted = overpredicted;  // works for all modes
     }
   }
 
@@ -1585,17 +1235,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       myfile << feature_compute_us[i] << "," << model_update_us[i] << "," << model_inference_us[i] << "\n";
     myfile.close();
     cout << "vw_timing_log.csv written" << endl;
-
-    ofstream myfile_new;
-    // myfile_new.open("D:\Results\timing\cpu_timing_log.csv");
-    myfile_new.open("cpu_timing_log.csv");
-    myfile_new << "read_primary_cpu_us,log_primary_cpu_us\n";
-    cout << read_primary_cpu_us.size() << endl;
-    cout << log_primary_cpu_us.size() << endl;
-    for (int i = 0; i < read_primary_cpu_us.size(); i++)
-      myfile_new << read_primary_cpu_us[i] << "," << log_primary_cpu_us[i] << "\n";
-    myfile_new.close();
-    cout << "cpu_timing_log.csv written" << endl;
   }
 
   printf("Exiting\n");
