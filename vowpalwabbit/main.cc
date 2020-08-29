@@ -415,7 +415,8 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
 /* logging */
 struct Record
 {
-  int updateCount;
+  int window;
+  //int updateCount;
   double time;
   int hvmBusy;
   int hvmCores;
@@ -439,7 +440,7 @@ struct Record
 
 struct RecordCPU
 {
-  double time;
+  int window;
   int cpuBusy;
 };
 
@@ -471,12 +472,12 @@ void writeLogs()
     {
       Record r = records[i];
       if (DEBUG_PEAK)
-        fprintf(output_fp, "%d,%.6lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount, r.time,
+        fprintf(output_fp, "%d,%.6lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d\n", r.window, r.time,
             r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(), r.systemBusyMask.c_str(),
             r.min, r.max, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max, r.overpredicted, r.safeguard,
             r.explore, r.updateModel);
       else
-        fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d\n", r.updateCount, r.time,
+        fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d\n", r.window, r.time,
             r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(), r.systemBusyMask.c_str(),
             r.min, r.max, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max, r.overpredicted, r.safeguard,
             r.explore, r.updateModel);
@@ -498,11 +499,11 @@ void writeLogs()
     FILE* output_cpu_fp = nullptr;
     output_cpu_fp = _wfopen(output_cpu_csv.c_str(), L"w+");
     ASSERT(output_cpu_fp != NULL);
-    fprintf(output_cpu_fp, "time_sec,primary_busy_cores\n");
+    fprintf(output_cpu_fp, "window,primary_busy_cores\n");
     for (size_t i = 0; i < numLogEntriesCPU; i++)
     {
       RecordCPU r = recordsCPU[i];
-      fprintf(output_cpu_fp, "%.6lf,%d\n", r.time, r.cpuBusy);
+      fprintf(output_cpu_fp, "%d,%d\n", r.window, r.cpuBusy);
     }
     fflush(output_fp);
     cout << "busy cpu logs written" << endl;
@@ -724,6 +725,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   /************************/
   // main loop
   /************************/
+  int window = 0;
   int newPrimaryCoresPrev = 0;
 
   int debug_count = 0;
@@ -741,101 +743,34 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
   while (timer.ElapsedSeconds() < RUN_DURATION_SEC)
   {
+    window++;
     debug_count++;
     if (DEBUG && debug_count > 6)
       break;
 
-    if (NO_HARVESTING)
+    learn_start = high_resolution_clock::now();
+    feedback_start = high_resolution_clock::now();
+
+    // resetting parameters
+    overpredicted = 1;
+    safeguard = 0;
+    updateModel = 0;
+    sum = 0;
+    size = 0;
+    // count = 0;
+    max = 0;
+    cpu_max_observed = 0;
+    min = primary.maxCores;
+    cpu_busy_a.clear();
+    invoke_learning = 0;
+
+    /* collect cpu data for vw learning window */
+    while (true)
     {
-      start = high_resolution_clock::now();
-      max = 0;  // reset max
+      HVMAgent_SpinUS(read_cpu_sleep_us);
 
-      while (true)
-      {
-        HVMAgent_SpinUS(read_cpu_sleep_us);
-
-        systemBusyMask = HVMAgent_BusyMaskCoresNonSMTVMs();
-        hvmBusyCores = hvm.busyCores(systemBusyMask);
-        hvmCores = hvm.curCores;
-        primaryBusyCores = primary.busyCores(systemBusyMask);
-        primaryCores = primary.curCores;
-
-        if (primaryBusyCores > max)
-          max = primaryBusyCores;
-
-        if (DEBUG_PEAK)
-        {
-          recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores};
-          ASSERT(numLogEntries < MAX_RECORDS);
-        }
-
-        stop = high_resolution_clock::now();
-        us_elapsed = duration_cast<microseconds>(stop - start);
-        if (us_elapsed.count() >= learning_us)
-          break;  // log max from every 2ms
-      }
-
-      if (LOGGING)
-      {
-        records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-            primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-            0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
-        ASSERT(numLogEntries < MAX_RECORDS);
-      }
-    }
-
-    else if (FIXED_BUFFER_MODE)
-    {
-      start = high_resolution_clock::now();
-      max = 0;  // reset max
-
-      if (DEBUG)
-        cout << "fixed buffer mode" << endl;
-
-      while (true)
-      {
-        HVMAgent_SpinUS(read_cpu_sleep_us);
-
-        systemBusyMask = HVMAgent_BusyMaskCoresNonSMTVMs();
-        hvmBusyCores = hvm.busyCores(systemBusyMask);
-        hvmCores = hvm.curCores;
-        primaryBusyCores = primary.busyCores(systemBusyMask);
-        primaryCores = primary.curCores;
-
-        if (primaryBusyCores > max)
-          max = primaryBusyCores;
-
-        stop = high_resolution_clock::now();
-        us_elapsed = duration_cast<microseconds>(stop - start);
-        if (us_elapsed.count() >= delay_us)
-          break;  // log max from delay_us
-      }
-
-      newPrimaryCores = std::min(primaryBusyCores + bufferSize, (INT32)primary.maxCores);  // re-compute primary size
-
-      records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(), 0,
-          0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
-      ASSERT(numLogEntries < MAX_RECORDS);
-
-      if (newPrimaryCores != primary.curCores)
-      {
-        updateCores(newPrimaryCores, systemBusyMask);
-        HVMAgent_SpinUS(sleep_us);  // sleep for 1ms for cpu affinity call (if issued) to take effects
-        count++;
-      }
-
-      if (DEBUG)
-      {
-        cout << "hvmBusyCores " << hvmBusyCores << "hvmCores " << hvmCores << "primaryBusyCores " << primaryBusyCores
-             << "primaryCores " << primaryCores << endl;
-      }
-    }
-
-    else if (REACTIVE_FIXED_BUFFER_MODE)
-    {
-      start = high_resolution_clock::now();
-      max = 0;  // reset max
+      if (TIMING)
+        start = high_resolution_clock::now();
 
       systemBusyMask = HVMAgent_BusyMaskCoresNonSMTVMs();
       hvmBusyCores = hvm.busyCores(systemBusyMask);
@@ -843,538 +778,297 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       primaryBusyCores = primary.busyCores(systemBusyMask);
       primaryCores = primary.curCores;
 
-      newPrimaryCores = std::min(primaryBusyCores + bufferSize, (int)primary.maxCores);  // re-compute primary size
-
-      if (newPrimaryCores != primary.curCores)
+      if (DEBUG_PEAK)
       {
-        records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-            primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-            0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
+        recordsCPU[numLogEntriesCPU++] = {window, primaryBusyCores};
         ASSERT(numLogEntries < MAX_RECORDS);
-
-        updateCores(newPrimaryCores, systemBusyMask);
-        HVMAgent_SpinUS(sleep_us);  // sleep for 1ms for cpu affinity call (if issued) to take effects
-        count++;
-      }
-
-      if (DEBUG)
-      {
-        cout << "hvmBusyCores " << hvmBusyCores << "hvmCores " << hvmCores << "primaryBusyCores " << primaryBusyCores
-             << "primaryCores " << primaryCores << endl;
-      }
-    }
-
-    else
-    {
-      learn_start = high_resolution_clock::now();
-      feedback_start = high_resolution_clock::now();
-
-      // resetting parameters
-      overpredicted = 1;
-      safeguard = 0;
-      updateModel = 0;
-      sum = 0;
-      size = 0;
-      // count = 0;
-      max = 0;
-      cpu_max_observed = 0;
-      min = primary.maxCores;
-      cpu_busy_a.clear();
-      invoke_learning = 0;
-
-      /* collect cpu data for vw learning window */
-      while (true)
-      {
-        HVMAgent_SpinUS(read_cpu_sleep_us);
-
-        if (TIMING)
-          start = high_resolution_clock::now();
-
-        systemBusyMask = HVMAgent_BusyMaskCoresNonSMTVMs();
-        hvmBusyCores = hvm.busyCores(systemBusyMask);
-        hvmCores = hvm.curCores;
-        primaryBusyCores = primary.busyCores(systemBusyMask);
-        primaryCores = primary.curCores;
-
-        if (DEBUG_PEAK)
-        {
-          recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores};
-          ASSERT(numLogEntries < MAX_RECORDS);
-        }
-
-        if (TIMING)
-        {
-          stop = high_resolution_clock::now();
-          duration = duration_cast<microseconds>(stop - start);
-          read_primary_cpu_us.push_back((int)duration.count());
-          start = high_resolution_clock::now();
-        }
-
-        // record cpu reading
-        if (primaryBusyCores > cpu_max_observed)
-          cpu_max_observed = primaryBusyCores;
-        if (NO_PRED && DEPLOY_ONLY)
-          primaryBusyCores = std::min(primaryBusyCores, newPrimaryCores);
-        cpu_busy_a.push_back(primaryBusyCores);
-        sum += primaryBusyCores;
-        if (primaryBusyCores < min)
-          min = primaryBusyCores;
-        if (primaryBusyCores > max)
-          max = primaryBusyCores;
-        if (primaryBusyCores > feedback_max)
-          feedback_max = primaryBusyCores;
-
-        // check for underprediction (buffer empty)
-        if (LEARNING_MODE == 3 || LEARNING_MODE == 4)
-        {
-          if (primaryBusyCores == primary.curCores && primary.curCores != primary.maxCores)
-          {
-            // buffer runs out (underprediction) --> trigger immediate safeguard
-            overpredicted = 0;
-            safeguard = 1;
-            if (LEARNING_MODE == 4)
-              break;  // stop data collection immediately for mode 4
-
-            // give all cores back to primary for mode3
-            newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
-
-            records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-                primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
-            ASSERT(numLogEntries < MAX_RECORDS);
-
-            if (newPrimaryCores != primary.curCores)
-            {
-              // cout << "safeguard1" << endl;
-              updateCores(newPrimaryCores, systemBusyMask);
-              HVMAgent_SpinUS(sleep_us);
-              count++;
-            }
-          }
-        }
-
-        // feedback loop
-        if (FEEDBACK)
-        {
-          feedback_stop = high_resolution_clock::now();
-          us_elapsed = duration_cast<microseconds>(feedback_stop - feedback_start);
-          if (us_elapsed.count() >= feedback_us)
-          {  // trigger feedback
-            if (feedback_max == primary.curCores && primary.curCores != primary.maxCores)
-            {
-              // underpred: increase cores for primary
-              overpredicted = 0;
-              newPrimaryCores = primary.curCores * 2;
-            }
-            else
-            {
-              overpredicted = 1;
-              newPrimaryCores = primary.curCores - 1;
-            }
-
-            // adjust primary size
-            newPrimaryCores = std::min(newPrimaryCores, (INT32)primary.maxCores);
-            // newPrimaryCores = std::max(newPrimaryCores, pred);
-
-            records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-                primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
-            ASSERT(numLogEntries < MAX_RECORDS);
-
-            // update hvm size
-            if (newPrimaryCores != primary.curCores)
-            {
-              // cout << "safeguard1" << endl;
-              updateCores(newPrimaryCores, systemBusyMask);
-              HVMAgent_SpinUS(sleep_us);
-              count++;
-            }
-
-            // resetting for the smaller feedback window
-            feedback_max = 0;
-            feedback_start = high_resolution_clock::now();
-          }
-        }
-
-        if (TIMING)
-        {
-          stop = high_resolution_clock::now();
-          duration = duration_cast<microseconds>(stop - start);
-          log_primary_cpu_us.push_back((int)duration.count());
-          start = high_resolution_clock::now();
-        }
-
-        learn_stop = high_resolution_clock::now();
-        us_elapsed = duration_cast<microseconds>(learn_stop - learn_start);
-        if (us_elapsed.count() >= learning_us)
-          break;  // a learning window past
-      }
-
-      /****** completed data collection window ******/
-
-      /****** compute features ******/
-      start = high_resolution_clock::now();
-      size = cpu_busy_a.size();
-      avg = 1.0 * sum / size;
-      // compute stddev
-      double tmp_sum = 0;
-      for (int i = 0; i < size; i++)
-      {
-        tmp_sum += (cpu_busy_a[i] - avg) * (cpu_busy_a[i] - avg);
-      }
-      tmp_sum = 1.0 * tmp_sum / size;
-      stddev = sqrt(tmp_sum);
-      // compute median
-      std::sort(cpu_busy_a.begin(), cpu_busy_a.end());
-      if (size % 2 != 0)
-        med = cpu_busy_a[size / 2];
-      else
-        med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2.0;
-
-      //cpu_max_observed = max;
-      if (LEARNING_MODE == 7)
-      {
-        min = 1;
-        max = 1;
-        avg = 1;
-        stddev = 1;
-        med = 1;
-      }
-      if (FLAT_USAGE)
-      {
-        min = 3;
-        max = 3;
-        avg = 3;
-        stddev = 0;
-        med = 3;
       }
 
       if (TIMING)
       {
         stop = high_resolution_clock::now();
         duration = duration_cast<microseconds>(stop - start);
-        // std::cout << duration.count() << endl;
-        // time_feature_computation = duration_cast<microseconds>(stop - start);
-        // std::cout << "time_feature_computation (us) " << duration.count() << endl;
-        feature_compute_us.push_back(duration.count());
-      }
-
-      /****** compute CPU affinity ******/
-      if (first_window)
-      {
-        // first iteration gives all cores to primary VM
-        if (DEBUG)
-          std::cout << "Using vw learning" << endl;
-        first_window = 0;
-
-        newPrimaryCores = primary.maxCores;
-        newPrimaryCoresPrev = newPrimaryCores;
-        /* construct features for model update */
-        vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
-            " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
-      }
-      else
-      {
+        read_primary_cpu_us.push_back((int)duration.count());
         start = high_resolution_clock::now();
+      }
 
-        if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 ||
-            LEARNING_MODE == 8 || LEARNING_MODE == 9 || LEARNING_MODE == 10 || LEARNING_MODE == 11)
-        {  // mode 1&2 need to decide overprediction here
-          if (max < (INT32)primary.curCores || primary.curCores == primary.maxCores)
+      // record cpu reading
+      if (primaryBusyCores > cpu_max_observed)
+        cpu_max_observed = primaryBusyCores;
+      if (NO_PRED && DEPLOY_ONLY)
+        primaryBusyCores = std::min(primaryBusyCores, newPrimaryCores);
+      cpu_busy_a.push_back(primaryBusyCores);
+      sum += primaryBusyCores;
+      if (primaryBusyCores < min)
+        min = primaryBusyCores;
+      if (primaryBusyCores > max)
+        max = primaryBusyCores;
+      if (primaryBusyCores > feedback_max)
+        feedback_max = primaryBusyCores;
+
+      // check for underprediction (buffer empty)
+      if (LEARNING_MODE == 3 || LEARNING_MODE == 4)
+      {
+        if (primaryBusyCores == primary.curCores && primary.curCores != primary.maxCores)
+        {
+          // buffer runs out (underprediction) --> trigger immediate safeguard
+          overpredicted = 0;
+          safeguard = 1;
+          if (LEARNING_MODE == 4)
+            break;  // stop data collection immediately for mode 4
+
+          // give all cores back to primary for mode3
+          newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
+
+          records[numLogEntries++] = {window, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+              primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
+              bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
+          ASSERT(numLogEntries < MAX_RECORDS);
+
+          if (newPrimaryCores != primary.curCores)
+          {
+            // cout << "safeguard1" << endl;
+            updateCores(newPrimaryCores, systemBusyMask);
+            HVMAgent_SpinUS(sleep_us);
+            count++;
+          }
+        }
+      }
+
+      if (TIMING)
+      {
+        stop = high_resolution_clock::now();
+        duration = duration_cast<microseconds>(stop - start);
+        log_primary_cpu_us.push_back((int)duration.count());
+        start = high_resolution_clock::now();
+      }
+
+      learn_stop = high_resolution_clock::now();
+      us_elapsed = duration_cast<microseconds>(learn_stop - learn_start);
+      if (us_elapsed.count() >= learning_us)
+        break;  // a learning window past
+    }
+
+    /****** completed data collection window ******/
+
+    /****** compute features ******/
+    start = high_resolution_clock::now();
+    size = cpu_busy_a.size();
+    avg = 1.0 * sum / size;
+    // compute stddev
+    double tmp_sum = 0;
+    for (int i = 0; i < size; i++)
+    {
+      tmp_sum += (cpu_busy_a[i] - avg) * (cpu_busy_a[i] - avg);
+    }
+    tmp_sum = 1.0 * tmp_sum / size;
+    stddev = sqrt(tmp_sum);
+    // compute median
+    std::sort(cpu_busy_a.begin(), cpu_busy_a.end());
+    if (size % 2 != 0)
+      med = cpu_busy_a[size / 2];
+    else
+      med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2.0;
+
+    //cpu_max_observed = max;
+
+    if (TIMING)
+    {
+      stop = high_resolution_clock::now();
+      duration = duration_cast<microseconds>(stop - start);
+      // std::cout << duration.count() << endl;
+      // time_feature_computation = duration_cast<microseconds>(stop - start);
+      // std::cout << "time_feature_computation (us) " << duration.count() << endl;
+      feature_compute_us.push_back(duration.count());
+    }
+
+    /****** compute CPU affinity ******/
+    if (first_window)
+    {
+      // first iteration gives all cores to primary VM
+      if (DEBUG)
+        std::cout << "Using vw learning" << endl;
+      first_window = 0;
+
+      newPrimaryCores = primary.maxCores;
+      newPrimaryCoresPrev = newPrimaryCores;
+      /* construct features for model update */
+      vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
+          " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
+    }
+    else
+    {
+      start = high_resolution_clock::now();
+
+      if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 ||
+          LEARNING_MODE == 8 || LEARNING_MODE == 9 || LEARNING_MODE == 10 || LEARNING_MODE == 11)
+      {  // mode 1&2 need to decide overprediction here
+        if (max < (INT32)primary.curCores || primary.curCores == primary.maxCores)
+          overpredicted = 1;
+        else
+          overpredicted = 0;
+
+        if (NO_PRED)
+        {
+          if (max < pred_alloc || pred_alloc == primary.maxCores)
             overpredicted = 1;
           else
             overpredicted = 0;
-
-          if (NO_PRED)
-          {
-            if (max < pred_alloc || pred_alloc == primary.maxCores)
-              overpredicted = 1;
-            else
-              overpredicted = 0;
-          }
         }
+      }
 
-        if (LEARNING_MODE == 6)
+      if (LEARNING_MODE == 6)
+      {
+        if (max < (INT32)primary.curCores || primary.curCores == primary.maxCores)
         {
-          if (max < (INT32)primary.curCores || primary.curCores == primary.maxCores)
-          {
-            overpredicted = 1;
-            buffer_empty_consecutive_count = 0;
-          }
-          else
-          {
-            overpredicted = 0;
-            buffer_empty_consecutive_count += 1;
-          }
-        }
-
-        if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 8 || LEARNING_MODE == 9)
-        {
-          // mode 1 always relies on predictions
-          invoke_learning = 1;
-          safeguard = 0;
-        }
-        else if (LEARNING_MODE == 6)
-        {
-          // mode 6 triggers safeguard/exploration if buffer empty for 3 past consecutive intervals
-          if (buffer_empty_consecutive_count == 3)
-          {
-            invoke_learning = 0;
-            safeguard = 1;
-            buffer_empty_consecutive_count = 0;
-          }
-          else
-          {
-            invoke_learning = 1;
-            safeguard = 0;
-          }
+          overpredicted = 1;
+          buffer_empty_consecutive_count = 0;
         }
         else
         {
-          // mode 2&3&4&5&8&9 can trigger safeguard
-          if (overpredicted)
-          {
-            invoke_learning = 1;
-            safeguard = 0;
-          }
-          else
-          {
-            invoke_learning = 0;
-            safeguard = 1;
-          }
+          overpredicted = 0;
+          buffer_empty_consecutive_count += 1;
         }
+      }
 
-        if (DEBUG)
-          cout << "invoke_learning: " << invoke_learning << " safeguard:" << safeguard << endl;
+      if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 8 || LEARNING_MODE == 9)
+      {
+        // mode 1 always relies on predictions
+        invoke_learning = 1;
+        safeguard = 0;
+      }
+      else if (LEARNING_MODE == 6)
+      {
+        // mode 6 triggers safeguard/exploration if buffer empty for 3 past consecutive intervals
+        if (buffer_empty_consecutive_count == 3)
+        {
+          invoke_learning = 0;
+          safeguard = 1;
+          buffer_empty_consecutive_count = 0;
+        }
+        else
+        {
+          invoke_learning = 1;
+          safeguard = 0;
+        }
+      }
+      else
+      {
+        // mode 2&3&4&5&8&9 can trigger safeguard
+        if (overpredicted)
+        {
+          invoke_learning = 1;
+          safeguard = 0;
+        }
+        else
+        {
+          invoke_learning = 0;
+          safeguard = 1;
+        }
+      }
 
-        // invoke_learning = 1;
-        if (invoke_learning)
-        {  // use model prediction for next window only if overpredicted from the previous window
-          // if (dropBadFeatures && prevSafeguard)
-          //{
-          // don't update the model
-          // int update_model = 0;
-          //}
-          if (!dropBadFeatures || prevOverpredicted)
-          {
-            updateModel = 1;
-            // update model if (NOT drop bad features) or (previous window buffer NOT empty) ==> not(drop bad features
-            // and previous window buffer empty)
-            /* create cost label */
-            vwLabel.clear();
+      if (DEBUG)
+        cout << "invoke_learning: " << invoke_learning << " safeguard:" << safeguard << endl;
 
-            /*
-            if (safeguard || PRED_ONE_OVER || ((LEARNING_MODE == 1 && !overpredicted)))
-              correct_class = std::min(max + 1, (INT32)primary.maxCores);
-            else
-              correct_class = max;
-            */
-            correct_class = max;
-            // cpu_max_observed = max;
-            // correct_class = cpu_max_observed;
-            // if (NO_PRED && LEARNING_MODE == 5)
-            //  correct_class = std::min(max, newPrimaryCores);
+      // invoke_learning = 1;
+      if (invoke_learning)
+      {  
+        if (!dropBadFeatures || prevOverpredicted)
+        {
+          updateModel = 1;
 
-            switch (LEARNING_ALGO)
-            {
-              case CSOAA:
-                if (COST_FUNCTION == 0)
-                {
-                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
-                  {
-                    if (k < correct_class)
-                      cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
-                    else
-                      cost = k - correct_class;  // prefect- & over-prediction
-                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
-                  }
-                }
-                if (COST_FUNCTION == 1)  // symmetric cost
-                {
-                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
-                  {
-                    if (k < correct_class)
-                      cost = correct_class - k;  // underprediction (worse --> higher cost)
-                    else
-                      cost = k - correct_class;  // prefect- & over-prediction
-                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
-                  }
-                }
-                if (COST_FUNCTION == 2)  // hedge cost
-                {
-                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
-                  {
-                    if (k < correct_class)
-                      cost = correct_class - k;  // underprediction (worse --> higher cost)
-                    else
-                      cost = 0;  // prefect- & over-prediction
-                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
-                  }
-                }
-                if (COST_FUNCTION == 3)  // max + 1
-                {
-                  correct_class = std::min(max + 1, (INT32)primary.maxCores);
-                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
-                  {
-                    if (k < correct_class)
-                      cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
-                    else
-                      cost = k - correct_class;  // prefect- & over-prediction
-                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
-                  }
-                }
-                /* create vw training data */
-                // vwLabel = "1:3 2:0 3:1";
-                vwMsg = vwLabel + vwFeature;  // vwLabel from current window, features generated from previous window
-                ex = VW::read_example(*vw, vwMsg.c_str());  // update vw model with features from previous window
-                if (DEBUG)
-                  std::cout << "vwMsg to update model: " << vwMsg.c_str() << endl;
-                // example* ex = VW::read_example(*vw, "1:3 2:0 3:-1 |busy_cores_prev_interval min:0 max:0 avg:0
-                // stddev:0 med:0");
+          /* create cost label */
+          vwLabel.clear();
+          correct_class = max;
 
-                /* udpate vw model */
-                vw->learn(*ex);
-                VW::finish_example(*vw, *ex);
-                break;
-              case REG:
-                vwLabel = std::to_string(cpu_max_observed) + " ";
-                /* create vw training data */
-                vwMsg = vwLabel + vwFeature;  // vwLabel from current window, features generated from previous window
-                ex = VW::read_example(*vw, vwMsg.c_str());  // update vw model with features from previous window
-                /* udpate vw model */
-                vw->learn(*ex);
-                VW::finish_example(*vw, *ex);
-                break;
-              case CBANDIT:
-                // TODO
-                // correct_class = std::min(cpu_max_observed + 1, (INT32)primary.maxCores);
-                correct_class = cpu_max_observed;
-                if (DEBUG)
-                  std::cout << "correct_class: " << correct_class << endl;
-                if (!NO_PRED && !overpredicted)  // partial feedback & underpredicted --> drop data
-                  updateModel = 0;
-                if (!DEPLOY_ONLY && updateModel)
-                {
-                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
-                  {
-                    if (k < correct_class)
-                      cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
-                    else
-                      cost = k - correct_class;  // prefect- & over-prediction
-                    /*
-                    if (k == (INT32)primary.curCores)
-                      vwLabel += std::to_string(k) + ":" + std::to_string(cost) + ":1 ";
-                    else
-                      vwLabel += std::to_string(k) + ":" + std::to_string(cost) + ":0 ";
-                    */
-                    vwLabel.clear();
-                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + ":1 ";
-                    /* create vw training data */
-                    vwMsg = vwLabel + vwFeature;  // vwLabel from current window, features generated from previous window
-                    ex = VW::read_example(*vw, vwMsg.c_str());  // update vw model with features from previous window
-                    if (DEBUG)
-                      std::cout << "vwMsg to update model: " << vwMsg.c_str() << endl;
-                    /* udpate vw model */
-                    vw->learn(*ex);
-                    VW::finish_example(*vw, *ex);
-                  }
-                }
-                break;
-              case CBEXPLORE:
-                // TODO
-                // correct_class = std::min(cpu_max_observed + 1, (INT32)primary.maxCores);
-                correct_class = cpu_max_observed;
-                if (DEBUG)
-                  std::cout << "correct_class: " << correct_class << endl;
-                if (!NO_PRED && !overpredicted)  // partial feedback & underpredicted --> drop data
-                  updateModel = 0;
-                if (!DEPLOY_ONLY && updateModel)
-                {
-                  for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
-                  {
-                    if (k < correct_class)
-                      cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
-                    else
-                      cost = k - correct_class;  // prefect- & over-prediction
-                    vwLabel.clear();
-                    if (k == (INT32)primary.maxCores)
-                      vwLabel += std::to_string(k) + ":" + std::to_string(cost) + ":0.2 ";
-                    else
-                      vwLabel += std::to_string(k) + ":" + std::to_string(cost) + ":0.8 ";
-                    /* create vw training data */
-                    vwMsg = vwLabel + vwFeature;  // vwLabel from current window, features generated from previous window
-                    ex = VW::read_example(*vw, vwMsg.c_str());  // update vw model with features from previous window
-                    if (DEBUG)
-                      std::cout << "vwMsg to update model: " << vwMsg.c_str() << endl;
-                    /* udpate vw model */
-                    vw->learn(*ex);
-                    VW::finish_example(*vw, *ex);
-                  }
-                }
-                break;
-              default:
-                std::cout << "EXIT: No learning algorithm specified." << endl;
-                std::exit(1);
-            }
-          }
-          if (TIMING)
-          {
-            stop = high_resolution_clock::now();
-            duration = duration_cast<microseconds>(stop - start);
-            // std::cout << duration.count() << endl;
-            // time_model_udpate = duration_cast<microseconds>(stop - start);
-            // std::cout << "time_model_udpate (us) " << duration.count() << endl;
-            model_update_us.push_back(duration.count());
-            start = high_resolution_clock::now();
-          }
-
-          /* construct features for prediction */
-          vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
-              " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
-          if (DEBUG)
-            std::cout << "vwFeature: " << vwFeature.c_str() << endl;
-          ex_pred = VW::read_example(*vw, vwFeature.c_str());
-
-          /* get prediction --> # cores to primary VM */
-          vw->predict(*ex_pred);
 
           switch (LEARNING_ALGO)
           {
             case CSOAA:
-              pred = (int)VW::get_cost_sensitive_prediction(ex_pred);
+              for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
+              {
+                if (k < correct_class)
+                  cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
+                else
+                  cost = k - correct_class;  // prefect- & over-prediction
+                vwLabel += std::to_string(k) + ":" + std::to_string(cost) + " ";
+              }
+              /* create vw training data */
+              // vwLabel = "1:3 2:0 3:1";
+              vwMsg = vwLabel + vwFeature;  // vwLabel from current window, features generated from previous window
+              ex = VW::read_example(*vw, vwMsg.c_str());  // update vw model with features from previous window
+              if (DEBUG)
+                std::cout << "vwMsg to update model: " << vwMsg.c_str() << endl;
+              // example* ex = VW::read_example(*vw, "1:3 2:0 3:-1 |busy_cores_prev_interval min:0 max:0 avg:0
+              // stddev:0 med:0");
+
+              /* udpate vw model */
+              vw->learn(*ex);
+              VW::finish_example(*vw, *ex);
               break;
             case REG:
-              pred = (int)ceil(VW::get_prediction(ex_pred));
+              vwLabel = std::to_string(cpu_max_observed) + " ";
+              /* create vw training data */
+              vwMsg = vwLabel + vwFeature;  // vwLabel from current window, features generated from previous window
+              ex = VW::read_example(*vw, vwMsg.c_str());  // update vw model with features from previous window
+              /* udpate vw model */
+              vw->learn(*ex);
+              VW::finish_example(*vw, *ex);
               break;
             case CBANDIT:
-              length = VW::get_action_score_length(ex_pred);
+              correct_class = cpu_max_observed;
               if (DEBUG)
-                std::cout << "length: " << length << std::endl;
-              for (int i = 0; i < length; ++i)
+                std::cout << "correct_class: " << correct_class << endl;
+              if (!NO_PRED && !overpredicted)  // partial feedback & underpredicted --> drop data
+                updateModel = 0;
+              if (!DEPLOY_ONLY && updateModel)
               {
-                prob = VW::get_action_score(ex_pred, i);  // get prediction from vw
-                if (DEBUG)
-                  std::cout << "action " << i + 1 << " prob: " << prob << std::endl;
-                if (prob == 1)
+                for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
                 {
-                  pred = i + 1;
-                  break;
+                  if (k < correct_class)
+                    cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
+                  else
+                    cost = k - correct_class;  // prefect- & over-prediction
+                  vwLabel.clear();
+                  vwLabel += std::to_string(k) + ":" + std::to_string(cost) + ":1 ";
+                  /* create vw training data */
+                  vwMsg = vwLabel + vwFeature;  // vwLabel from current window, features generated from previous window
+                  ex = VW::read_example(*vw, vwMsg.c_str());  // update vw model with features from previous window
+                  if (DEBUG)
+                    std::cout << "vwMsg to update model: " << vwMsg.c_str() << endl;
+                  /* udpate vw model */
+                  vw->learn(*ex);
+                  VW::finish_example(*vw, *ex);
                 }
               }
               break;
             case CBEXPLORE:
-              length = VW::get_action_score_length(ex_pred);
+              correct_class = cpu_max_observed;
               if (DEBUG)
-                std::cout << "length: " << length << std::endl;
-              for (int i = 0; i < length; ++i)
+                std::cout << "correct_class: " << correct_class << endl;
+              if (!NO_PRED && !overpredicted)  // partial feedback & underpredicted --> drop data
+                updateModel = 0;
+              if (!DEPLOY_ONLY && updateModel)
               {
-                prob = VW::get_action_score(ex_pred, i);  // get prediction from vw
-                if (DEBUG)
-                  std::cout << "action " << i + 1 << " prob: " << prob << std::endl;
-                if (prob == 1)
+                for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
                 {
-                  pred = i + 1;
-                  break;
+                  if (k < correct_class)
+                    cost = correct_class - k + primary.maxCores;  // underprediction (worse --> higher cost)
+                  else
+                    cost = k - correct_class;  // prefect- & over-prediction
+                  vwLabel.clear();
+                  if (k == (INT32)primary.maxCores)
+                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + ":0.2 ";
+                  else
+                    vwLabel += std::to_string(k) + ":" + std::to_string(cost) + ":0.8 ";
+                  /* create vw training data */
+                  vwMsg = vwLabel + vwFeature;  // vwLabel from current window, features generated from previous window
+                  ex = VW::read_example(*vw, vwMsg.c_str());  // update vw model with features from previous window
+                  if (DEBUG)
+                    std::cout << "vwMsg to update model: " << vwMsg.c_str() << endl;
+                  /* udpate vw model */
+                  vw->learn(*ex);
+                  VW::finish_example(*vw, *ex);
                 }
               }
               break;
@@ -1382,121 +1076,186 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               std::cout << "EXIT: No learning algorithm specified." << endl;
               std::exit(1);
           }
-
-          if (DEBUG)
-            std::cout << "pred = " << pred << endl;
-          VW::finish_example(*vw, *ex_pred);
-
-          // read current busy status?
-          if (use_curr_busy)
-            newPrimaryCores = std::min(std::max(pred, primaryBusyCores + 1),
-                (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
-          else
-            newPrimaryCores = std::min(std::max(pred, cpu_max_observed + 1),
-                (INT32)primary.maxCores);  // keep at least 1 core in addition to max from the past window
-
-          if (PRED_PLUS_ONE)
-            newPrimaryCores = std::min(std::max(pred + PRED_PLUS_OFFSET, primaryBusyCores + 1),
-                (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
-
-          if (LEARNING_MODE == 8 || LEARNING_MODE == 10)
-          {
-            newPrimaryCores = std::min(std::max(pred + 1, primaryBusyCores + 1), (INT32)primary.maxCores);
-            if (DEBUG)
-              std::cout << "<debug> newPrimaryCores: " << newPrimaryCores << ",  primary.maxCores: " << primary.maxCores
-                        << ",  pred: " << pred << endl;
-          }
-
-          if (TIMING)
-          {
-            stop = high_resolution_clock::now();
-            duration = duration_cast<microseconds>(stop - start);
-            // std::cout << duration.count() << endl;
-            // time_model_inference = duration_cast<microseconds>(stop - start);
-            // std::cout << "time_model_inference (us) " << duration.count() << endl;
-            model_inference_us.push_back(duration.count());
-            start = high_resolution_clock::now();
-          }
-
-          // cout << "numPrimaryCores: " << numPrimaryCoresPrev << " --> " << numPrimaryCores << "  hvm.curCores" <<
-          // hvm.curCoresPrev << " --> " << hvm.curCores << endl;
         }
-
-        if (safeguard)
+        if (TIMING)
         {
-          // under-prediction
-          pred = 0;
-          if (DEBUG)
-            std::cout << "UNDER-PREDICTION" << endl;
-          newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
-
-          if (LEARNING_MODE == 5)
-          {
-            // mode 5 uses less aggressive safeguard
-            newPrimaryCores = std::min(primary.maxCores, primary.curCores * 2);
-          }
-
-          if (NO_PRED && LEARNING_MODE == 5)
-            newPrimaryCores = std::min((INT32)primary.maxCores, newPrimaryCoresPrev * 2);
-          // safeguard = 1;
+          stop = high_resolution_clock::now();
+          duration = duration_cast<microseconds>(stop - start);
+          // std::cout << duration.count() << endl;
+          // time_model_udpate = duration_cast<microseconds>(stop - start);
+          // std::cout << "time_model_udpate (us) " << duration.count() << endl;
+          model_update_us.push_back(duration.count());
+          start = high_resolution_clock::now();
         }
+
+        /* construct features for prediction */
+        vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
+            " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
+        if (DEBUG)
+          std::cout << "vwFeature: " << vwFeature.c_str() << endl;
+        ex_pred = VW::read_example(*vw, vwFeature.c_str());
+
+        /* get prediction --> # cores to primary VM */
+        vw->predict(*ex_pred);
+
+        switch (LEARNING_ALGO)
+        {
+          case CSOAA:
+            pred = (int)VW::get_cost_sensitive_prediction(ex_pred);
+            break;
+          case REG:
+            pred = (int)ceil(VW::get_prediction(ex_pred));
+            break;
+          case CBANDIT:
+            length = VW::get_action_score_length(ex_pred);
+            if (DEBUG)
+              std::cout << "length: " << length << std::endl;
+            for (int i = 0; i < length; ++i)
+            {
+              prob = VW::get_action_score(ex_pred, i);  // get prediction from vw
+              if (DEBUG)
+                std::cout << "action " << i + 1 << " prob: " << prob << std::endl;
+              if (prob == 1)
+              {
+                pred = i + 1;
+                break;
+              }
+            }
+            break;
+          case CBEXPLORE:
+            length = VW::get_action_score_length(ex_pred);
+            if (DEBUG)
+              std::cout << "length: " << length << std::endl;
+            for (int i = 0; i < length; ++i)
+            {
+              prob = VW::get_action_score(ex_pred, i);  // get prediction from vw
+              if (DEBUG)
+                std::cout << "action " << i + 1 << " prob: " << prob << std::endl;
+              if (prob == 1)
+              {
+                pred = i + 1;
+                break;
+              }
+            }
+            break;
+          default:
+            std::cout << "EXIT: No learning algorithm specified." << endl;
+            std::exit(1);
+        }
+
+        if (DEBUG)
+          std::cout << "pred = " << pred << endl;
+        VW::finish_example(*vw, *ex_pred);
+
+        // read current busy status?
+        if (use_curr_busy)
+          newPrimaryCores = std::min(std::max(pred, primaryBusyCores + 1),
+              (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
+        else
+          newPrimaryCores = std::min(std::max(pred, cpu_max_observed + 1),
+              (INT32)primary.maxCores);  // keep at least 1 core in addition to max from the past window
+
+        if (PRED_PLUS_ONE)
+          newPrimaryCores = std::min(std::max(pred + PRED_PLUS_OFFSET, primaryBusyCores + 1),
+              (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
+
+        if (LEARNING_MODE == 8 || LEARNING_MODE == 10)
+        {
+          newPrimaryCores = std::min(std::max(pred + 1, primaryBusyCores + 1), (INT32)primary.maxCores);
+          if (DEBUG)
+            std::cout << "<debug> newPrimaryCores: " << newPrimaryCores << ",  primary.maxCores: " << primary.maxCores
+                      << ",  pred: " << pred << endl;
+        }
+
+        if (TIMING)
+        {
+          stop = high_resolution_clock::now();
+          duration = duration_cast<microseconds>(stop - start);
+          // std::cout << duration.count() << endl;
+          // time_model_inference = duration_cast<microseconds>(stop - start);
+          // std::cout << "time_model_inference (us) " << duration.count() << endl;
+          model_inference_us.push_back(duration.count());
+          start = high_resolution_clock::now();
+        }
+
+        // cout << "numPrimaryCores: " << numPrimaryCoresPrev << " --> " << numPrimaryCores << "  hvm.curCores" <<
+        // hvm.curCoresPrev << " --> " << hvm.curCores << endl;
       }
 
-      if (LEARNING_ALGO == CBEXPLORE)
+      if (safeguard)
       {
-        randint = rand() % PRIMARY_SIZE + 1;
-        if (randint > 8)
-          explore = 1;
-      }
+        // under-prediction
+        pred = 0;
+        if (DEBUG)
+          std::cout << "UNDER-PREDICTION" << endl;
+        newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
 
-
-      records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-          primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-          min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, explore,
-          updateModel};
-
-      /****** update CPU affinity ******/
-      if (explore)
-      {
-        newPrimaryCores = PRIMARY_SIZE;
-        explore = 0;
-      }
-
-      if (NO_PRED)
-      {
-        pred_alloc = newPrimaryCores;
-        // newPrimaryCores = primary.maxCores;
         if (LEARNING_MODE == 5)
         {
-          if (newPrimaryCores != newPrimaryCoresPrev)
-            HVMAgent_SpinUS(sleep_us);
-          newPrimaryCoresPrev = newPrimaryCores;
+          // mode 5 uses less aggressive safeguard
+          newPrimaryCores = std::min(primary.maxCores, primary.curCores * 2);
         }
+
+        if (NO_PRED && LEARNING_MODE == 5)
+          newPrimaryCores = std::min((INT32)primary.maxCores, newPrimaryCoresPrev * 2);
+        // safeguard = 1;
+      }
+    }
+
+    if (LEARNING_ALGO == CBEXPLORE)
+    {
+      randint = rand() % PRIMARY_SIZE + 1;
+      if (randint > 8)
+        explore = 1;
+    }
+
+
+    records[numLogEntries++] = {window, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+        primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
+        min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, explore,
+        updateModel};
+
+    /****** update CPU affinity ******/
+    if (explore)
+    {
+      newPrimaryCores = PRIMARY_SIZE;
+      explore = 0;
+    }
+
+    if (NO_PRED)
+    {
+      pred_alloc = newPrimaryCores;
+      // newPrimaryCores = primary.maxCores;
+      if (LEARNING_MODE == 5)
+      {
+        if (newPrimaryCores != newPrimaryCoresPrev)
+          HVMAgent_SpinUS(sleep_us);
+        newPrimaryCoresPrev = newPrimaryCores;
+      }
+    }
+    else
+    {
+      if (newPrimaryCores != primary.curCores)
+      {
+        if (DEBUG)
+          std::cout << "<debug> newPrimaryCores = " << newPrimaryCores << endl;
+        updateCores(newPrimaryCores, systemBusyMask);
+        // printf("called update: primary.curMask=0x%x\n", primary.curMask);
+
+        HVMAgent_SpinUS(sleep_us);
+        count++;
       }
       else
       {
-        if (newPrimaryCores != primary.curCores)
-        {
-          if (DEBUG)
-            std::cout << "<debug> newPrimaryCores = " << newPrimaryCores << endl;
-          updateCores(newPrimaryCores, systemBusyMask);
-          // printf("called update: primary.curMask=0x%x\n", primary.curMask);
-
+        if (FIXED_DELAY)
           HVMAgent_SpinUS(sleep_us);
-          count++;
-        }
-        else
-        {
-          if (FIXED_DELAY)
-            HVMAgent_SpinUS(sleep_us);
-        }
       }
-
-      ASSERT(numLogEntries < MAX_RECORDS);
-
-      // prevSafeguard = safeguard; //only workds for mode 2-4
-      prevOverpredicted = overpredicted;  // works for all modes
     }
+
+    ASSERT(numLogEntries < MAX_RECORDS);
+
+    // prevSafeguard = safeguard; //only workds for mode 2-4
+    prevOverpredicted = overpredicted;  // works for all modes
   }
 
   // write logs to file
