@@ -682,6 +682,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
       break;
     case CBEXPLORE:
+      // CBEXPLORE makes same VW calls as CBANDIT except CBEXPLORE gives all cores back to primary for 20% of the time
       model = std::string(modelName.begin(), modelName.begin());
       if (DEPLOY_ONLY)
       {
@@ -994,6 +995,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                 updateModel = 0;
               if (!DEPLOY_ONLY && updateModel)
               {
+                // cost function defined here:
                 for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
                 {
                   if (k < correct_class)
@@ -1151,8 +1153,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
     if (LEARNING_ALGO == CBEXPLORE)
     {
-      randint = rand() % PRIMARY_SIZE + 1;
-      if (randint > 8)
+      randint = rand() % 10 + 1;
+      if (randint > 8) // explore (give all cores to primary) for 20% of the time
         explore = 1;
     }
 
@@ -1165,7 +1167,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
     /****** update CPU affinity ******/
     if (explore)
     {
-      newPrimaryCores = PRIMARY_SIZE;
+      newPrimaryCores = PRIMARY_SIZE; // exploration action: give all cores to primary
       explore = 0;
     }
 
