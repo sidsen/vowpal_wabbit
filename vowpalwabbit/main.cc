@@ -769,9 +769,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
     {
       HVMAgent_SpinUS(read_cpu_sleep_us);
 
-      if (TIMING)
-        start = high_resolution_clock::now();
-
       systemBusyMask = HVMAgent_BusyMaskCoresNonSMTVMs();
       hvmBusyCores = hvm.busyCores(systemBusyMask);
       hvmCores = hvm.curCores;
@@ -782,14 +779,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         recordsCPU[numLogEntriesCPU++] = {window, primaryBusyCores};
         ASSERT(numLogEntries < MAX_RECORDS);
-      }
-
-      if (TIMING)
-      {
-        stop = high_resolution_clock::now();
-        duration = duration_cast<microseconds>(stop - start);
-        read_primary_cpu_us.push_back((int)duration.count());
-        start = high_resolution_clock::now();
       }
 
       // record cpu reading
@@ -835,14 +824,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         }
       }
 
-      if (TIMING)
-      {
-        stop = high_resolution_clock::now();
-        duration = duration_cast<microseconds>(stop - start);
-        log_primary_cpu_us.push_back((int)duration.count());
-        start = high_resolution_clock::now();
-      }
-
       learn_stop = high_resolution_clock::now();
       us_elapsed = duration_cast<microseconds>(learn_stop - learn_start);
       if (us_elapsed.count() >= learning_us)
@@ -871,16 +852,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2.0;
 
     //cpu_max_observed = max;
-
-    if (TIMING)
-    {
-      stop = high_resolution_clock::now();
-      duration = duration_cast<microseconds>(stop - start);
-      // std::cout << duration.count() << endl;
-      // time_feature_computation = duration_cast<microseconds>(stop - start);
-      // std::cout << "time_feature_computation (us) " << duration.count() << endl;
-      feature_compute_us.push_back(duration.count());
-    }
 
     /****** compute CPU affinity ******/
     if (first_window)
@@ -1077,16 +1048,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               std::exit(1);
           }
         }
-        if (TIMING)
-        {
-          stop = high_resolution_clock::now();
-          duration = duration_cast<microseconds>(stop - start);
-          // std::cout << duration.count() << endl;
-          // time_model_udpate = duration_cast<microseconds>(stop - start);
-          // std::cout << "time_model_udpate (us) " << duration.count() << endl;
-          model_update_us.push_back(duration.count());
-          start = high_resolution_clock::now();
-        }
 
         /* construct features for prediction */
         vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
@@ -1166,20 +1127,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             std::cout << "<debug> newPrimaryCores: " << newPrimaryCores << ",  primary.maxCores: " << primary.maxCores
                       << ",  pred: " << pred << endl;
         }
-
-        if (TIMING)
-        {
-          stop = high_resolution_clock::now();
-          duration = duration_cast<microseconds>(stop - start);
-          // std::cout << duration.count() << endl;
-          // time_model_inference = duration_cast<microseconds>(stop - start);
-          // std::cout << "time_model_inference (us) " << duration.count() << endl;
-          model_inference_us.push_back(duration.count());
-          start = high_resolution_clock::now();
-        }
-
-        // cout << "numPrimaryCores: " << numPrimaryCoresPrev << " --> " << numPrimaryCores << "  hvm.curCores" <<
-        // hvm.curCoresPrev << " --> " << hvm.curCores << endl;
       }
 
       if (safeguard)
@@ -1260,37 +1207,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
   // write logs to file
   writeLogs();
-
-  // write timing logs to file
-  FILE* timing_fp = nullptr;
-  if (TIMING)
-  {
-    // writing files to  D:\HarvestVM\abs-registry\Benchmarks\CPUBully
-    cout << "writing timing logs" << endl;
-    ofstream myfile;
-    // myfile.open("D:\Results\timing\vw_timing_log.csv");
-    myfile.open("vw_timing_log.csv");
-    myfile << "feature_compute_us,model_update_us,model_inference_us\n";
-    cout << feature_compute_us.size() << endl;
-    cout << model_update_us.size() << endl;
-    cout << model_inference_us.size() << endl;
-    for (int i = 0; i < model_update_us.size(); i++)
-      myfile << feature_compute_us[i] << "," << model_update_us[i] << "," << model_inference_us[i] << "\n";
-    myfile.close();
-    cout << "vw_timing_log.csv written" << endl;
-
-    ofstream myfile_new;
-    // myfile_new.open("D:\Results\timing\cpu_timing_log.csv");
-    myfile_new.open("cpu_timing_log.csv");
-    myfile_new << "read_primary_cpu_us,log_primary_cpu_us\n";
-    cout << read_primary_cpu_us.size() << endl;
-    cout << log_primary_cpu_us.size() << endl;
-    for (int i = 0; i < read_primary_cpu_us.size(); i++)
-      myfile_new << read_primary_cpu_us[i] << "," << log_primary_cpu_us[i] << "\n";
-    myfile_new.close();
-    cout << "cpu_timing_log.csv written" << endl;
-  }
-
   VW::finish(*vw);
 
   printf("Exiting\n");
