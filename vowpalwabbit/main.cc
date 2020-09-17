@@ -123,6 +123,11 @@ int FIXED_BUFFER_MODE = 0;
 int REACTIVE_FIXED_BUFFER_MODE = 0;
 float DELAY_MS = 0;
 int LEARNING = 0;
+/*
+LEARNING_MODE = 1: no safeguard, always uses learning prediction to allocate cores
+LEARNING_MODE = 4: when buffer exhausted, don't update learning model, immediately invoke safeguard_aggressive (give all cores to primary), then start data collection again for the new learning window   
+LEARNING_MODE = 5: when buffer exhausted, don't update learning model, invoke safeguard (doubles #cores for primary) for next learning window
+*/
 int LEARNING_MODE = 0;
 // LearningAlgo LEARNING_ALGO = CSOAA;  // use CSOAA as the learning algo by default
 LearningAlgo LEARNING_ALGO = CBANDIT;
