@@ -69,7 +69,9 @@ enum LearningAlgo
   CSOAA,
   REG,
   CBANDIT,
-  CBEXPLORE
+  CBEXPLORE,
+  CBANDIT_NEW_COST,
+  CBEXPLORE_NEW_COST
 };
 
 /* process args */
@@ -125,7 +127,8 @@ float DELAY_MS = 0;
 int LEARNING = 0;
 int LEARNING_MODE = 0;
 // LearningAlgo LEARNING_ALGO = CSOAA;  // use CSOAA as the learning algo by default
-LearningAlgo LEARNING_ALGO = CBANDIT;
+// Use CBANDIT as the learning algo by default, with our new cost function.
+LearningAlgo LEARNING_ALGO = CBANDIT_NEW_COST;
 
 int COST_FUNCTION = 0;
 float LEARNING_RATE = 0.1;
@@ -265,7 +268,8 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
       }
       else if (0 == ::_wcsnicmp(argv[1], ARG_LEARNING_ALGO_CB, ARRAY_SIZE(ARG_LEARNING_ALGO_CB)))
       {
-        LEARNING_ALGO = CBANDIT;
+        //LEARNING_ALGO = CBANDIT;
+        LEARNING_ALGO = CBANDIT_NEW_COST;
         wcout << "LEARNING_ALGO: CB" << std::endl;
       }
       else if (0 == ::_wcsnicmp(argv[1], ARG_LEARNING_ALGO_CB_EXPLORE, ARRAY_SIZE(ARG_LEARNING_ALGO_CB_EXPLORE)))
@@ -667,6 +671,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       std::cout << "linear regression" << endl;
       break;
     case CBANDIT:
+    case CBANDIT_NEW_COST:
       model = std::string(modelName.begin(), modelName.begin());
       if (DEPLOY_ONLY)
       {
@@ -682,6 +687,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
       break;
     case CBEXPLORE:
+    case CBEXPLORE_NEW_COST:
       // CBEXPLORE makes same VW calls as CBANDIT except CBEXPLORE gives all cores back to primary for 20% of the time
       model = std::string(modelName.begin(), modelName.begin());
       if (DEPLOY_ONLY)
@@ -944,7 +950,10 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
 
       // invoke_learning = 1;
       if (invoke_learning)
-      {  
+      {
+        // SID: The prevOverpredicted flag only increases the situations in which we update the model,
+        // so this is okay. (With our new cost function, we need to make sure to always learn/update
+        // the model, as we always get some feedback for each decision.)
         if (!dropBadFeatures || prevOverpredicted)
         {
           updateModel = 1;
@@ -986,6 +995,62 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               /* udpate vw model */
               vw->learn(*ex);
               VW::finish_example(*vw, *ex);
+              break;
+            case CBANDIT_NEW_COST:
+              correct_class = cpu_max_observed;
+              if (DEBUG)
+                std::cout << "correct_class: " << correct_class << endl;
+              if (!NO_PRED && !overpredicted)  // partial feedback & underpredicted (but we still get some feedback!)
+              {
+                // cost function defined here:
+                // We get feedback for cost classes less than or equal to the current allocation. We do not know the
+                // cost of classes above the allocation (they could be perfectly adequate, or they may still underpredict).
+                for (int k = 1; k < (INT32)primary.curCores + 1; k++)
+                {
+                  cost = primary.maxCores - k;
+
+                  vwLabel.clear();
+                  vwLabel += std::to_string(k) + ":" + std::to_string(cost) + ":1 ";
+                  /* create vw training data */
+                  vwMsg = vwLabel + vwFeature;  // vwLabel from current window, features generated from previous window
+                  ex = VW::read_example(*vw, vwMsg.c_str());  // update vw model with features from previous window
+                  if (DEBUG)
+                    std::cout << "vwMsg to update model: " << vwMsg.c_str() << endl;
+                  /* update vw model */
+                  vw->learn(*ex);
+                  VW::finish_example(*vw, *ex);
+                }
+              }
+              // SID: CONSOLIDATE THIS WITH ABOVE CASE
+              else if (!DEPLOY_ONLY && updateModel)
+              {
+                // cost function defined here:
+                // We get feedback for all classes because we overpredicted (the primary used fewer
+                // cores than we allocated to it).
+                for (int k = 1; k < (INT32)primary.maxCores + 1; k++)
+                {
+                  if (k >= correct_class)
+                    // Exact prediction has 0 cost; overpredictions have cost {1,2,...,primary.maxCores -
+                    // correct_class}. 
+                    cost = k - correct_class;
+                  else
+                    // Underpredictions have the same cost as in the partial feedback case above, in the 
+                    // range {primary.maxCores - correct_class + 1,...,primary.maxCores - 1}. Importantly,
+                    // the minimum underprediction cost is greater than the maximum overprediction cost!
+                    cost = primary.maxCores - k;
+
+                  vwLabel.clear();
+                  vwLabel += std::to_string(k) + ":" + std::to_string(cost) + ":1 ";
+                  /* create vw training data */
+                  vwMsg = vwLabel + vwFeature;  // vwLabel from current window, features generated from previous window
+                  ex = VW::read_example(*vw, vwMsg.c_str());  // update vw model with features from previous window
+                  if (DEBUG)
+                    std::cout << "vwMsg to update model: " << vwMsg.c_str() << endl;
+                  /* udpate vw model */
+                  vw->learn(*ex);
+                  VW::finish_example(*vw, *ex);
+                }
+              }
               break;
             case CBANDIT:
               correct_class = cpu_max_observed;
