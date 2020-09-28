@@ -89,6 +89,7 @@ const WCHAR ARG_TIMING[] = L"--timing";
 const WCHAR ARG_DEBUG[] = L"--debug";
 const WCHAR ARG_NO_HARVESTING[] = L"--no_harvesting";
 const WCHAR ARG_USE_PREV_PEAK[] = L"--use_prev_peak";
+const WCHAR ARG_USE_PREV_PEAK_MULTIPLE[] = L"--use_prev_peak_multiple";
 const WCHAR ARG_PRIMARY_ALONE[] = L"--primary_alone";
 const WCHAR ARG_FEEDBACK[] = L"--feedback";
 const WCHAR ARG_FEEDBACK_MS[] = L"--feedback_ms";
@@ -150,6 +151,7 @@ int TIMING = 0;       // measure vw timing
 int DEBUG = 0;        // print debug messages
 int NO_HARVESTING = 0;
 int USE_PREV_PEAK = 0;
+int USE_PREV_PEAK_MULTIPLE = 0;
 int PRIMARY_ALONE = 0;
 int PRIMARY_SIZE = 0;
 
@@ -246,6 +248,10 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     else if (0 == ::_wcsnicmp(argv[0], ARG_USE_PREV_PEAK, ARRAY_SIZE(ARG_USE_PREV_PEAK)))
     {
       USE_PREV_PEAK = _wtoi(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_USE_PREV_PEAK_MULTIPLE, ARRAY_SIZE(ARG_USE_PREV_PEAK_MULTIPLE)))
+    {
+      USE_PREV_PEAK_MULTIPLE = _wtoi(argv[1]);
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_PRIMARY_ALONE, ARRAY_SIZE(ARG_PRIMARY_ALONE)))
     {
@@ -447,7 +453,7 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     shift;
   }
 
-  if (LEARNING_MODE != 0 || NO_HARVESTING != 0 || REACTIVE_FIXED_BUFFER_MODE != 0 || USE_PREV_PEAK != 0)
+  if (LEARNING_MODE != 0 || NO_HARVESTING != 0 || REACTIVE_FIXED_BUFFER_MODE != 0 || USE_PREV_PEAK != 0 || USE_PREV_PEAK_MULTIPLE != 0)
     FIXED_BUFFER_MODE = 0;
 
   wcout << "output_csv: " << output_csv << std::endl;
@@ -457,6 +463,7 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   wcout << "bufferSize: " << bufferSize << std::endl;
   wcout << "REACTIVE_FIXED_BUFFER_MODE: " << REACTIVE_FIXED_BUFFER_MODE << std::endl;
   wcout << "USE_PREV_PEAK: " << USE_PREV_PEAK << std::endl;
+  wcout << "USE_PREV_PEAK_MULTIPLE: " << USE_PREV_PEAK_MULTIPLE << std::endl;
   wcout << "DELAY_MS: " << DELAY_MS << std::endl;
   wcout << "LEARNING_MODE: " << LEARNING_MODE << std::endl;
   wcout << "PRED_ONE_OVER: " << PRED_ONE_OVER << std::endl;
@@ -687,6 +694,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   vector<int64_t> model_inference_us;
   vector<int64_t> read_primary_cpu_us;
   vector<int64_t> log_primary_cpu_us;
+  vector<int64_t> vectorMax;
+  int vectorMaxLength = 0;
+  int maxMultiWindow = 0;
 
   int invoke_learning = 0;
   int first_window = 1;
@@ -886,9 +896,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       if (max == newPrimaryCores)  // compare observed max with the vm cpu size
       {
         if (PRED_PLUS_ONE)
-          newPrimaryCores = std::min(max + 1, 10); //(int)primary.maxCores);  // increase vm size by one
+          newPrimaryCores = std::min(max + 1, (int)primary.maxCores);  // increase vm size by one
         else
-          newPrimaryCores = 10;  //(int)primary.maxCores;  // increase vm size by one
+          newPrimaryCores = (int)primary.maxCores;  // give all cores back
       }
       else
         newPrimaryCores = max;
@@ -898,6 +908,81 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
             primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
             0, 0, 0, 0, 0, max + 1, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
+        ASSERT(numLogEntries < MAX_RECORDS);
+      }
+      if (stop_harvest)
+      {
+        if (!reset)
+        {
+          updateCores(PRIMARY_SIZE, systemBusyMask);
+          HVMAgent_SpinUS(sleep_us);
+          reset = 1;
+        }
+      }
+      else
+      {
+        // update hvm size
+        if (newPrimaryCores != primary.curCores)
+        {
+          updateCores(newPrimaryCores, systemBusyMask);
+          HVMAgent_SpinUS(sleep_us);
+          count++;
+        }
+      }
+    }
+
+    else if (USE_PREV_PEAK_MULTIPLE)
+    {
+      start = high_resolution_clock::now();
+      max = 0;  // reset max
+
+      while (true)
+      {
+        HVMAgent_SpinUS(read_cpu_sleep_us);
+
+        systemBusyMask = HVMAgent_BusyMaskCoresNonSMTVMs();
+        hvmBusyCores = hvm.busyCores(systemBusyMask);
+        hvmCores = hvm.curCores;
+        primaryBusyCores = primary.busyCores(systemBusyMask);
+        primaryCores = primary.curCores;
+
+        if (primaryBusyCores > max)
+          max = primaryBusyCores;  // updating max
+
+        if (DEBUG_PEAK)
+        {
+          recordsCPU[numLogEntriesCPU++] = {timer.ElapsedUS() / 1000000.0, primaryBusyCores, primaryCores};
+          ASSERT(numLogEntries < MAX_RECORDS);
+        }
+
+        stop = high_resolution_clock::now();
+        us_elapsed = duration_cast<microseconds>(stop - start);
+        if (us_elapsed.count() >= learning_us)
+          break;  // log max from every 2ms
+      }
+
+      vectorMax.push_back(max);
+      vectorMaxLength++;
+      if (vectorMaxLength < USE_PREV_PEAK_MULTIPLE)
+        maxMultiWindow = *std::max_element(vectorMax.begin(), vectorMax.end());
+      else
+        maxMultiWindow = *std::max_element(vectorMax.end() - USE_PREV_PEAK_MULTIPLE, vectorMax.end());
+
+      if (max == newPrimaryCores)  // compare observed max with the vm cpu size
+      {
+        if (PRED_PLUS_ONE)
+          newPrimaryCores = std::min(maxMultiWindow + 1, (int)primary.maxCores);  // increase vm size by one
+        else
+          newPrimaryCores = (int)primary.maxCores;  //(int)primary.maxCores;  // give all cores back 
+      }
+      else
+        newPrimaryCores = maxMultiWindow;
+
+      if (LOGGING)
+      {
+        records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+            primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
+            0, 0, 0, 0, 0, maxMultiWindow, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
         ASSERT(numLogEntries < MAX_RECORDS);
       }
       if (stop_harvest)
