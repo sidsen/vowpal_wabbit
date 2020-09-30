@@ -513,6 +513,8 @@ struct Record
   string systemBusyMask;
   int min;
   int max;
+  int max5;
+  int max50;
   double avg;
   double stddev;
   double med;
@@ -536,10 +538,11 @@ struct RecordCPU
 extern BOOLEAN verbose;
 
 #define MAX_RECORDS 10000000L
-Record records[MAX_RECORDS];
+Record records[MAX_RECORDS/2];
 UINT64 numLogEntries = 0;
 RecordCPU recordsCPU[20000000];
 UINT64 numLogEntriesCPU = 0;
+
 
 void writeLogs()
 {
@@ -551,7 +554,7 @@ void writeLogs()
 
     fprintf(output_fp,
         "iteration,time_sec,hvm_busy_cores,hvm_cores,primary_busy_cores,primary_cores,primary_cores_mask,system_busy_"
-        "mask_raw,f_min,f_max,f_avg,f_stddev,f_med,"
+        "mask_raw,f_min,f_max,f_max5,f_max50,f_avg,f_stddev,f_med,"
         "pred_peak,upper_bound,cpu_max,overpredicted,safeguard,feedback_max,update_model,bucketId\n");
     fflush(output_fp);
 
@@ -564,14 +567,14 @@ void writeLogs()
       const std::string& bucketIdStr = BucketIdMapA[r.bucketId];
 
       if (DEBUG_PEAK)
-        fprintf(output_fp, "%d,%.6lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d,%s\n", r.updateCount,
+        fprintf(output_fp, "%d,%.6lf,%d,%d,%d,%d,%s,%s,%d,%d,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d,%s\n", r.updateCount,
             r.time, r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(),
-            r.systemBusyMask.c_str(), r.min, r.max, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max,
+            r.systemBusyMask.c_str(), r.min, r.max, r.max5, r.max50, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max,
             r.overpredicted, r.safeguard, r.feedback_max, r.updateModel, bucketIdStr.c_str());
       else
-        fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%s,%s,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d,%s\n", r.updateCount,
+        fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%s,%s,%d,%d,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d,%s\n", r.updateCount,
             r.time, r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(),
-            r.systemBusyMask.c_str(), r.min, r.max, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max,
+            r.systemBusyMask.c_str(), r.min, r.max, r.max5, r.max50, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max,
             r.overpredicted, r.safeguard, r.feedback_max, r.updateModel, bucketIdStr.c_str());
     }
 
@@ -708,6 +711,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   int count = 0;
   int sum = 0;
   int max = 0;
+  int max5 = 0;
+  int max50 = 0;
   int feedback_max = 0;
   int min = primary.maxCores;
   double med = 0;
@@ -907,7 +912,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
             primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-            0, 0, 0, 0, 0, max + 1, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
+            0, 0, 0, 0, 0, 0, 0, max + 1, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
         ASSERT(numLogEntries < MAX_RECORDS);
       }
       if (stop_harvest)
@@ -982,7 +987,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
             primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-            0, 0, 0, 0, 0, maxMultiWindow, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
+            0, 0, 0, 0, 0, 0, 0, maxMultiWindow, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
         ASSERT(numLogEntries < MAX_RECORDS);
       }
       if (stop_harvest)
@@ -1041,7 +1046,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
         records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
             primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-            0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
+            0, 0, 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
         ASSERT(numLogEntries < MAX_RECORDS);
       }
     }
@@ -1078,7 +1083,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
           primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(), 0,
-          0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
+          0, 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel, bucketId};
       ASSERT(numLogEntries < MAX_RECORDS);
 
       if (newPrimaryCores != primary.curCores)
@@ -1108,6 +1113,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       size = 0;
       // count = 0;
       max = 0;
+      max5 = 0;
+      max50 = 0;
       min = primary.maxCores;
       cpu_busy_a.clear();
       invoke_learning = 0;
@@ -1167,7 +1174,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
             records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
                 primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel,
+                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel,
                 bucketId};
             ASSERT(numLogEntries < MAX_RECORDS);
 
@@ -1207,7 +1214,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
             records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
                 primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel,
+                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel,
                 bucketId};
             ASSERT(numLogEntries < MAX_RECORDS);
 
@@ -1255,6 +1262,17 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       /****** completed data collection window ******/
 
       /****** compute features ******/
+      vectorMax.push_back(max);
+      vectorMaxLength++;
+      if (vectorMaxLength < 5)
+        max5 = *std::max_element(vectorMax.begin(), vectorMax.end());
+      else
+        max5 = *std::max_element(vectorMax.end() - 5, vectorMax.end());
+      if (vectorMaxLength < 50)
+        max50 = *std::max_element(vectorMax.begin(), vectorMax.end());
+      else
+        max50 = *std::max_element(vectorMax.end() - 50, vectorMax.end());
+
       start = high_resolution_clock::now();
       size = cpu_busy_a.size();
       avg = 1.0 * sum / size;
@@ -1312,14 +1330,23 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         newPrimaryCores = primary.maxCores;
         newPrimaryCoresPrev = newPrimaryCores;
         /* construct features for model update */
-        vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
-            " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
+        if (LEARNING_MODE == 10)
+        {
+          vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
+              " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med) +
+              " max5:" + std::to_string(max5) + " max50:" + std::to_string(max50); 
+        }
+        else
+        {
+          vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
+              " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
+        }
       }
       else
       {
         start = high_resolution_clock::now();
 
-        if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 ||
+        if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 || LEARNING_MODE == 50 ||
             LEARNING_MODE == 8 || LEARNING_MODE == 9 || LEARNING_MODE == 10 || LEARNING_MODE == 11)
         {  // mode 1&2 need to decide overprediction here
           if (max < (INT32)primary.curCores || primary.curCores == primary.maxCores)
@@ -1510,8 +1537,17 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           }
 
           /* construct features for prediction */
-          vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
-              " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
+          if (LEARNING_MODE == 50)
+          {
+            vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
+                " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med) +
+                " max5:" + std::to_string(max5) + " max50:" + std::to_string(max50);
+          }
+          else
+          {
+            vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
+                " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med);
+          }
           if (DEBUG)
             std::cout << "vwFeature: " << vwFeature.c_str() << endl;
           ex_pred = VW::read_example(*vw, vwFeature.c_str());
@@ -1582,13 +1618,13 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             std::cout << "UNDER-PREDICTION" << endl;
           newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
 
-          if (LEARNING_MODE == 5)
+          if (LEARNING_MODE == 5 || LEARNING_MODE == 50)
           {
             // mode 5 uses less aggressive safeguard
             newPrimaryCores = std::min(primary.maxCores, primary.curCores * 2);
           }
 
-          if (NO_PRED && LEARNING_MODE == 5)
+          if (NO_PRED && (LEARNING_MODE == 5 || LEARNING_MODE == 50))
             newPrimaryCores = std::min((INT32)primary.maxCores, newPrimaryCoresPrev * 2);
           // safeguard = 1;
         }
@@ -1597,7 +1633,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
           primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-          min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, feedback_max,
+          min, max, max5, max50, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, feedback_max,
           updateModel, bucketId};
 
       /****** update CPU affinity ******/
@@ -1605,7 +1641,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         pred_alloc = newPrimaryCores;
         // newPrimaryCores = primary.maxCores;
-        if (LEARNING_MODE == 5)
+        if (LEARNING_MODE == 5 || LEARNING_MODE == 50)
         {
           if (newPrimaryCores != newPrimaryCoresPrev)
             HVMAgent_SpinUS(sleep_us);
