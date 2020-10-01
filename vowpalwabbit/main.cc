@@ -127,8 +127,9 @@ float DELAY_MS = 0;
 int LEARNING = 0;
 /*
 LEARNING_MODE = 1: no safeguard, always uses learning prediction to allocate cores
-LEARNING_MODE = 4: when buffer exhausted, don't update learning model, immediately invoke safeguard_aggressive (give all cores to primary), then start data collection again for the new learning window   
-LEARNING_MODE = 5: when buffer exhausted, don't update learning model, invoke safeguard (doubles #cores for primary) for next learning window
+LEARNING_MODE = 4: when buffer exhausted, don't update learning model, immediately invoke safeguard_aggressive (give all
+cores to primary), then start data collection again for the new learning window LEARNING_MODE = 5: when buffer
+exhausted, don't update learning model, invoke safeguard (doubles #cores for primary) for next learning window
 */
 int LEARNING_MODE = 0;
 // LearningAlgo LEARNING_ALGO = CSOAA;  // use CSOAA as the learning algo by default
@@ -273,7 +274,7 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
       }
       else if (0 == ::_wcsnicmp(argv[1], ARG_LEARNING_ALGO_CB, ARRAY_SIZE(ARG_LEARNING_ALGO_CB)))
       {
-        //LEARNING_ALGO = CBANDIT;
+        // LEARNING_ALGO = CBANDIT;
         LEARNING_ALGO = CBANDIT_NEW_COST;
         wcout << "LEARNING_ALGO: CB" << std::endl;
       }
@@ -425,7 +426,7 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
 struct Record
 {
   int window;
-  //int updateCount;
+  // int updateCount;
   double time;
   int hvmBusy;
   int hvmCores;
@@ -681,14 +682,18 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       if (DEPLOY_ONLY)
       {
         std::cout << "cb: vw initialized with " << primary.maxCores << " classes, loading model " << endl;
-        //vw = VW::initialize("--cb_explore " + to_string(primary.maxCores) + " --epsilon 0 --power_t 0 -l 0.1 -i model");
-        vw = VW::initialize("--cb_explore " + to_string(primary.maxCores) + " --epsilon 0 --power_t 0 -l " + to_string(LEARNING_RATE) + " -i model");
+        // vw = VW::initialize("--cb_explore " + to_string(primary.maxCores) + " --epsilon 0 --power_t 0 -l 0.1 -i
+        // model");
+        vw = VW::initialize("--cb_explore " + to_string(primary.maxCores) + " --epsilon 0 --power_t 0 -l " +
+            to_string(LEARNING_RATE) + " -i model");
       }
       else
       {
         std::cout << "cb: vw initialized with " << primary.maxCores << " classes, loading model, saving model " << endl;
-        //vw = VW::initialize("--cb_explore " + to_string(primary.maxCores) + " --epsilon 0 --power_t 0 -l 0.1 -f model");
-        vw = VW::initialize("--cb_explore " + to_string(primary.maxCores) + " --epsilon 0 --power_t 0 -l " + to_string(LEARNING_RATE) + " -f model");
+        // vw = VW::initialize("--cb_explore " + to_string(primary.maxCores) + " --epsilon 0 --power_t 0 -l 0.1 -f
+        // model");
+        vw = VW::initialize("--cb_explore " + to_string(primary.maxCores) + " --epsilon 0 --power_t 0 -l " +
+            to_string(LEARNING_RATE) + " -f model");
       }
       break;
     case CBEXPLORE:
@@ -724,14 +729,17 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   /************************/
   // learning tweaks
   /************************/
-  int use_curr_busy = 1;
+  int use_curr_busy_override = 0;
+  int use_max_override = 0;
   std::cout << "************************" << endl;
   std::cout << "always update learning model" << endl;
   std::cout << "update under-predictions with (correct_label = observed_peak+1)" << endl;
-  if (use_curr_busy)
+  if (use_curr_busy_override)
     std::cout << "use current busy" << endl;
-  else
+  else if (use_max_override)
     std::cout << "use max from previous window" << endl;
+  else
+    std::cout << "disabling current busy/max overrides" << endl;
   std::cout << "************************" << endl;
 
   /************************/
@@ -822,8 +830,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
 
           records[numLogEntries++] = {window, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-              primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-              bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
+              primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
+              0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel};
           ASSERT(numLogEntries < MAX_RECORDS);
 
           if (newPrimaryCores != primary.curCores)
@@ -863,7 +871,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
     else
       med = (cpu_busy_a[(size - 1) / 2] + cpu_busy_a[size / 2]) / 2.0;
 
-    //cpu_max_observed = max;
+    // cpu_max_observed = max;
 
     /****** compute CPU affinity ******/
     if (first_window)
@@ -883,8 +891,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
     {
       start = high_resolution_clock::now();
 
-      if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 ||
-          LEARNING_MODE == 8 || LEARNING_MODE == 9 || LEARNING_MODE == 10 || LEARNING_MODE == 11)
+      if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 || LEARNING_MODE == 8 ||
+          LEARNING_MODE == 9 || LEARNING_MODE == 10 || LEARNING_MODE == 11)
       {  // mode 1&2 need to decide overprediction here
         if (max < (INT32)primary.curCores || primary.curCores == primary.maxCores)
           overpredicted = 1;
@@ -967,7 +975,6 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           vwLabel.clear();
           correct_class = max;
 
-
           switch (LEARNING_ALGO)
           {
             case CSOAA:
@@ -1009,7 +1016,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               {
                 // cost function defined here:
                 // We get feedback for cost classes less than or equal to the current allocation. We do not know the
-                // cost of classes above the allocation (they could be perfectly adequate, or they may still underpredict).
+                // cost of classes above the allocation (they could be perfectly adequate, or they may still
+                // underpredict).
                 for (int k = 1; k < (INT32)primary.curCores + 1; k++)
                 {
                   cost = primary.maxCores - k;
@@ -1036,10 +1044,10 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                 {
                   if (k >= correct_class)
                     // Exact prediction has 0 cost; overpredictions have cost {1,2,...,primary.maxCores -
-                    // correct_class}. 
+                    // correct_class}.
                     cost = k - correct_class;
                   else
-                    // Underpredictions have the same cost as in the partial feedback case above, in the 
+                    // Underpredictions have the same cost as in the partial feedback case above, in the
                     // range {primary.maxCores - correct_class + 1,...,primary.maxCores - 1}. Importantly,
                     // the minimum underprediction cost is greater than the maximum overprediction cost!
                     cost = primary.maxCores - k;
@@ -1181,10 +1189,10 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         VW::finish_example(*vw, *ex_pred);
 
         // read current busy status?
-        if (use_curr_busy)
+        if (use_curr_busy_override)
           newPrimaryCores = std::min(std::max(pred, primaryBusyCores + 1),
               (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
-        else
+        else if (use_max_override)
           newPrimaryCores = std::min(std::max(pred, cpu_max_observed + 1),
               (INT32)primary.maxCores);  // keep at least 1 core in addition to max from the past window
 
@@ -1224,20 +1232,18 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
     if (LEARNING_ALGO == CBEXPLORE)
     {
       randint = rand() % 10 + 1;
-      if (randint > 8) // explore (give all cores to primary) for 20% of the time
+      if (randint > 8)  // explore (give all cores to primary) for 20% of the time
         explore = 1;
     }
 
-
     records[numLogEntries++] = {window, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
-        primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-        min, max, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, explore,
-        updateModel};
+        primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(), min,
+        max, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, explore, updateModel};
 
     /****** update CPU affinity ******/
     if (explore)
     {
-      newPrimaryCores = PRIMARY_SIZE; // exploration action: give all cores to primary
+      newPrimaryCores = PRIMARY_SIZE;  // exploration action: give all cores to primary
       explore = 0;
     }
 
