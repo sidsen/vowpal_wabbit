@@ -127,9 +127,8 @@ float DELAY_MS = 0;
 int LEARNING = 0;
 /*
 LEARNING_MODE = 1: no safeguard, always uses learning prediction to allocate cores
-LEARNING_MODE = 4: when buffer exhausted, don't update learning model, immediately invoke safeguard_aggressive (give all
-cores to primary), then start data collection again for the new learning window LEARNING_MODE = 5: when buffer
-exhausted, don't update learning model, invoke safeguard (doubles #cores for primary) for next learning window
+LEARNING_MODE = 4: when buffer exhausted, don't update learning model, immediately invoke safeguard_aggressive (give all cores to primary), then start data collection again for the new learning window
+LEARNING_MODE = 5: when buffer exhausted, don't update learning model, invoke safeguard (doubles #cores for primary) for next learning window
 */
 int LEARNING_MODE = 0;
 // LearningAlgo LEARNING_ALGO = CSOAA;  // use CSOAA as the learning algo by default
@@ -280,7 +279,8 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
       }
       else if (0 == ::_wcsnicmp(argv[1], ARG_LEARNING_ALGO_CB_EXPLORE, ARRAY_SIZE(ARG_LEARNING_ALGO_CB_EXPLORE)))
       {
-        LEARNING_ALGO = CBEXPLORE;
+        //LEARNING_ALGO = CBEXPLORE;
+        LEARNING_ALGO = CBEXPLORE_NEW_COST;
         wcout << "LEARNING_ALGO: CBEXPLORE" << std::endl;
       }
     }
@@ -945,6 +945,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
       else
       {
+        // SID: NOTE THIS MEANS THAT LEARNING DOES NOT OCCUR IN WINDOWS WHEN SAFEGUARD IS INVOKED!
+
         // mode 2&3&4&5&8&9 can trigger safeguard
         if (overpredicted)
         {
@@ -1009,10 +1011,11 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
               VW::finish_example(*vw, *ex);
               break;
             case CBANDIT_NEW_COST:
+            case CBEXPLORE_NEW_COST:
               correct_class = cpu_max_observed;
               if (DEBUG)
                 std::cout << "correct_class: " << correct_class << endl;
-              if (!NO_PRED && !overpredicted)  // partial feedback & underpredicted (but we still get some feedback!)
+              if (!DEPLOY_ONLY && !NO_PRED && !overpredicted)  // partial feedback & underpredicted (but we still get some feedback!)
               {
                 // cost function defined here:
                 // We get feedback for cost classes less than or equal to the current allocation. We do not know the
@@ -1034,7 +1037,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                   VW::finish_example(*vw, *ex);
                 }
               }
-              // SID: CONSOLIDATE THIS WITH ABOVE CASE
+              // SID: CONSOLIDATE THIS WITH ABOVE CASE (BELOW IS ALSO INVOKED IF NO_PRED = 1, SINCE MUST HAVE FULL INFORMATION)
               else if (!DEPLOY_ONLY && updateModel)
               {
                 // cost function defined here:
@@ -1148,6 +1151,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             pred = (int)ceil(VW::get_prediction(ex_pred));
             break;
           case CBANDIT:
+          case CBANDIT_NEW_COST :
             length = VW::get_action_score_length(ex_pred);
             if (DEBUG)
               std::cout << "length: " << length << std::endl;
@@ -1164,6 +1168,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             }
             break;
           case CBEXPLORE:
+          case CBEXPLORE_NEW_COST :
             length = VW::get_action_score_length(ex_pred);
             if (DEBUG)
               std::cout << "length: " << length << std::endl;
@@ -1188,7 +1193,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           std::cout << "pred = " << pred << endl;
         VW::finish_example(*vw, *ex_pred);
 
-        // read current busy status?
+        newPrimaryCores = std::min(pred, (INT32)primary.maxCores);
+        // Apply overrides based on core usage in previous window
         if (use_curr_busy_override)
           newPrimaryCores = std::min(std::max(pred, primaryBusyCores + 1),
               (INT32)primary.maxCores);  // keep at least 1 core in addition to current busy
@@ -1229,7 +1235,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       }
     }
 
-    if (LEARNING_ALGO == CBEXPLORE)
+    if (LEARNING_ALGO == CBEXPLORE || LEARNING_ALGO == CBEXPLORE_NEW_COST)
     {
       randint = rand() % 10 + 1;
       if (randint > 8)  // explore (give all cores to primary) for 20% of the time
