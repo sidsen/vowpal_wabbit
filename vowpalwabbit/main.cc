@@ -78,6 +78,8 @@ const WCHAR ARG_BUFFER[] = L"--buffer";
 const WCHAR ARG_DELAY_MS[] = L"--delay_ms";
 const WCHAR ARG_REACTIVE_FIXED_BUFFER_MODE[] = L"--reactive_buffer_mode";
 const WCHAR ARG_LEARNING_MODE[] = L"--learning_mode";
+const WCHAR ARG_WINDOW[] = L"--window";
+const WCHAR ARG_SAFEGUARD_MODE[] = L"--safeguard_mode";
 const WCHAR ARG_LEARNING_ALGO[] = L"--learning_algo";
 const WCHAR ARG_LEARNING_ALGO_CSOAA[] = L"csoaa";
 const WCHAR ARG_LEARNING_ALGO_REG[] = L"reg";
@@ -129,6 +131,8 @@ int REACTIVE_FIXED_BUFFER_MODE = 0;
 float DELAY_MS = 0;
 int LEARNING = 0;
 int LEARNING_MODE = 0;
+int window = 3;
+int SAFEGUARD_MODE = 0;
 LearningAlgo LEARNING_ALGO = CSOAA;  // use CSOAA as the learning algo by default
 int COST_FUNCTION = 0;
 float LEARNING_RATE = 0.1;
@@ -220,6 +224,14 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_MODE, ARRAY_SIZE(ARG_LEARNING_MODE)))
     {
       LEARNING_MODE = _wtoi(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_WINDOW, ARRAY_SIZE(ARG_WINDOW)))
+    {
+      window = _wtoi(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_SAFEGUARD_MODE, ARRAY_SIZE(ARG_SAFEGUARD_MODE)))
+    {
+      SAFEGUARD_MODE = _wtoi(argv[1]);
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_PRED_ONE_OVER, ARRAY_SIZE(ARG_LEARNING_PRED_ONE_OVER)))
     {
@@ -453,7 +465,8 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     shift;
   }
 
-  if (LEARNING_MODE != 0 || NO_HARVESTING != 0 || REACTIVE_FIXED_BUFFER_MODE != 0 || USE_PREV_PEAK != 0 || USE_PREV_PEAK_MULTIPLE != 0)
+  if (LEARNING_MODE != 0 || NO_HARVESTING != 0 || REACTIVE_FIXED_BUFFER_MODE != 0 || USE_PREV_PEAK != 0 ||
+      USE_PREV_PEAK_MULTIPLE != 0)
     FIXED_BUFFER_MODE = 0;
 
   wcout << "output_csv: " << output_csv << std::endl;
@@ -466,6 +479,8 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   wcout << "USE_PREV_PEAK_MULTIPLE: " << USE_PREV_PEAK_MULTIPLE << std::endl;
   wcout << "DELAY_MS: " << DELAY_MS << std::endl;
   wcout << "LEARNING_MODE: " << LEARNING_MODE << std::endl;
+  wcout << "WINDOW: " << window << std::endl;
+  wcout << "SAFEGUARD_MODE: " << SAFEGUARD_MODE << std::endl;
   wcout << "PRED_ONE_OVER: " << PRED_ONE_OVER << std::endl;
   wcout << "FIXED_DELAY: " << FIXED_DELAY << std::endl;
   wcout << "LEARNING_MS: " << LEARNING_MS << std::endl;
@@ -538,11 +553,10 @@ struct RecordCPU
 extern BOOLEAN verbose;
 
 #define MAX_RECORDS 10000000L
-Record records[MAX_RECORDS/2];
+Record records[MAX_RECORDS / 2];
 UINT64 numLogEntries = 0;
 RecordCPU recordsCPU[20000000];
 UINT64 numLogEntriesCPU = 0;
-
 
 void writeLogs()
 {
@@ -567,15 +581,15 @@ void writeLogs()
       const std::string& bucketIdStr = BucketIdMapA[r.bucketId];
 
       if (DEBUG_PEAK)
-        fprintf(output_fp, "%d,%.6lf,%d,%d,%d,%d,%s,%s,%d,%d,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d,%s\n", r.updateCount,
-            r.time, r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(),
-            r.systemBusyMask.c_str(), r.min, r.max, r.max5, r.max50, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max,
-            r.overpredicted, r.safeguard, r.feedback_max, r.updateModel, bucketIdStr.c_str());
+        fprintf(output_fp, "%d,%.6lf,%d,%d,%d,%d,%s,%s,%d,%d,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d,%s\n",
+            r.updateCount, r.time, r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(),
+            r.systemBusyMask.c_str(), r.min, r.max, r.max5, r.max50, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores,
+            r.cpu_max, r.overpredicted, r.safeguard, r.feedback_max, r.updateModel, bucketIdStr.c_str());
       else
-        fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%s,%s,%d,%d,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d,%s\n", r.updateCount,
-            r.time, r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(),
-            r.systemBusyMask.c_str(), r.min, r.max, r.max5, r.max50, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores, r.cpu_max,
-            r.overpredicted, r.safeguard, r.feedback_max, r.updateModel, bucketIdStr.c_str());
+        fprintf(output_fp, "%d,%.3lf,%d,%d,%d,%d,%s,%s,%d,%d,%d,%d,%lf,%lf,%lf,%d,%d,%d,%d,%d,%d,%d,%s\n",
+            r.updateCount, r.time, r.hvmBusy, r.hvmCores, r.primaryBusy, r.primaryCores, r.primaryCoresMask.c_str(),
+            r.systemBusyMask.c_str(), r.min, r.max, r.max5, r.max50, r.avg, r.stddev, r.med, r.pred, r.newPrimaryCores,
+            r.cpu_max, r.overpredicted, r.safeguard, r.feedback_max, r.updateModel, bucketIdStr.c_str());
     }
 
     fflush(output_fp);
@@ -713,6 +727,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   int max = 0;
   int max5 = 0;
   int max50 = 0;
+  int max10 = 0;
   int feedback_max = 0;
   int min = primary.maxCores;
   double med = 0;
@@ -973,12 +988,17 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       else
         maxMultiWindow = *std::max_element(vectorMax.end() - USE_PREV_PEAK_MULTIPLE, vectorMax.end());
 
-      if (max == newPrimaryCores)  // compare observed max with the vm cpu size
+      if (max == newPrimaryCores && primary.curCores != primary.maxCores)  // compare observed max with the vm cpu size
       {
-        if (PRED_PLUS_ONE)
-          newPrimaryCores = std::min(maxMultiWindow + 1, (int)primary.maxCores);  // increase vm size by one
-        else
-          newPrimaryCores = (int)primary.maxCores;  //(int)primary.maxCores;  // give all cores back 
+        buffer_empty_consecutive_count++;
+        if (buffer_empty_consecutive_count == window)
+        {
+          buffer_empty_consecutive_count = 0; //reset
+          if (PRED_PLUS_ONE)
+            newPrimaryCores = std::min(maxMultiWindow + 1, (int)primary.maxCores);  // increase vm size by one
+          else
+            newPrimaryCores = (int)primary.maxCores;  //(int)primary.maxCores;  // give all cores back
+        }
       }
       else
         newPrimaryCores = maxMultiWindow;
@@ -1115,6 +1135,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       max = 0;
       max5 = 0;
       max50 = 0;
+      max10 = 0;
       min = primary.maxCores;
       cpu_busy_a.clear();
       invoke_learning = 0;
@@ -1171,11 +1192,18 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             // give all cores back to primary for mode3
             newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
 
+            if (SAFEGUARD_MODE == 1)
+              newPrimaryCores = std::min(primary.maxCores, primary.curCores * 2);
+            if (SAFEGUARD_MODE == 2)
+              newPrimaryCores = std::min(max50 + 1, (int)primary.maxCores);
+            if (SAFEGUARD_MODE == 3)
+              newPrimaryCores = std::min(max10 + 1, (int)primary.maxCores);
+
             // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
             records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
                 primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel,
-                bucketId};
+                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0,
+                updateModel, bucketId};
             ASSERT(numLogEntries < MAX_RECORDS);
 
             if (newPrimaryCores != primary.curCores)
@@ -1214,8 +1242,8 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
             records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
                 primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
-                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0, updateModel,
-                bucketId};
+                bitset<64>(systemBusyMask).to_string(), 0, 0, 0, 0, 0, 0, 0, 0, newPrimaryCores, max, 0, 0, 0,
+                updateModel, bucketId};
             ASSERT(numLogEntries < MAX_RECORDS);
 
             if (stop_harvest)
@@ -1272,6 +1300,10 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         max50 = *std::max_element(vectorMax.begin(), vectorMax.end());
       else
         max50 = *std::max_element(vectorMax.end() - 50, vectorMax.end());
+      if (vectorMaxLength < 10)
+        max10 = *std::max_element(vectorMax.begin(), vectorMax.end());
+      else
+        max10 = *std::max_element(vectorMax.end() - 10, vectorMax.end());
 
       start = high_resolution_clock::now();
       size = cpu_busy_a.size();
@@ -1330,11 +1362,17 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         newPrimaryCores = primary.maxCores;
         newPrimaryCoresPrev = newPrimaryCores;
         /* construct features for model update */
-        if (LEARNING_MODE == 10)
+        if (LEARNING_MODE == 50)
         {
           vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
               " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med) +
-              " max5:" + std::to_string(max5) + " max50:" + std::to_string(max50); 
+              " max5:" + std::to_string(max5) + " max50:" + std::to_string(max50);
+        }
+        else if (LEARNING_MODE == 55)
+        {
+          vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
+              " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med) +
+              " max50:" + std::to_string(max50);
         }
         else
         {
@@ -1346,8 +1384,9 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         start = high_resolution_clock::now();
 
-        if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 || LEARNING_MODE == 50 ||
-            LEARNING_MODE == 8 || LEARNING_MODE == 9 || LEARNING_MODE == 10 || LEARNING_MODE == 11)
+        if (LEARNING_MODE == 1 || LEARNING_MODE == 7 || LEARNING_MODE == 2 || LEARNING_MODE == 5 ||
+            LEARNING_MODE == 6 || LEARNING_MODE == 50 || LEARNING_MODE == 55 || LEARNING_MODE == 8 ||
+            LEARNING_MODE == 9 || LEARNING_MODE == 10 || LEARNING_MODE == 11)
         {  // mode 1&2 need to decide overprediction here
           if (max < (INT32)primary.curCores || primary.curCores == primary.maxCores)
             overpredicted = 1;
@@ -1386,7 +1425,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
         else if (LEARNING_MODE == 6)
         {
           // mode 6 triggers safeguard/exploration if buffer empty for 3 past consecutive intervals
-          if (buffer_empty_consecutive_count == 3)
+          if (buffer_empty_consecutive_count == window)
           {
             invoke_learning = 0;
             safeguard = 1;
@@ -1543,6 +1582,12 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
                 " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med) +
                 " max5:" + std::to_string(max5) + " max50:" + std::to_string(max50);
           }
+          else if (LEARNING_MODE == 55)
+          {
+            vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
+                " avg:" + std::to_string(avg) + " stddev:" + std::to_string(stddev) + " med:" + std::to_string(med) +
+                " max50:" + std::to_string(max50);
+          }
           else
           {
             vwFeature = "|busy_cores_prev_interval min:" + std::to_string(min) + " max:" + std::to_string(max) +
@@ -1618,14 +1663,27 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             std::cout << "UNDER-PREDICTION" << endl;
           newPrimaryCores = primary.maxCores;  // primary.maxCores - hvm.curCores;  // max # cores given to primary
 
-          if (LEARNING_MODE == 5 || LEARNING_MODE == 50)
+          if (SAFEGUARD_MODE == 1)
+            newPrimaryCores = std::min(primary.maxCores, primary.curCores * 2);
+          if (SAFEGUARD_MODE == 2)
+            newPrimaryCores = std::min(max50 + 1, (int)primary.maxCores);
+          if (SAFEGUARD_MODE == 3)
+            newPrimaryCores = std::min(max10 + 1, (int)primary.maxCores);
+          /*
+          if (LEARNING_MODE == 5 || LEARNING_MODE == 50 || LEARNING_MODE == 55)
           {
             // mode 5 uses less aggressive safeguard
             newPrimaryCores = std::min(primary.maxCores, primary.curCores * 2);
           }
+          if (LEARNING_MODE == 6 || LEARNING_MODE == 63)
+          {
+            // mode 6 uses more aggressive safeguard based on previous peak
+            newPrimaryCores = std::min(max50 + 1, (int)primary.maxCores);
+          }
 
-          if (NO_PRED && (LEARNING_MODE == 5 || LEARNING_MODE == 50))
+          if (NO_PRED && (LEARNING_MODE == 5 || LEARNING_MODE == 6 || LEARNING_MODE == 50 || LEARNING_MODE == 55))
             newPrimaryCores = std::min((INT32)primary.maxCores, newPrimaryCoresPrev * 2);
+          */
           // safeguard = 1;
         }
       }
@@ -1633,15 +1691,15 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
       // bucketId = primary.GetCpuWaitTimePercentileBucketId(99);
       records[numLogEntries++] = {count, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
           primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(), bitset<64>(systemBusyMask).to_string(),
-          min, max, max5, max50, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard, feedback_max,
-          updateModel, bucketId};
+          min, max, max5, max50, avg, stddev, med, pred, newPrimaryCores, cpu_max_observed, overpredicted, safeguard,
+          feedback_max, updateModel, bucketId};
 
       /****** update CPU affinity ******/
       if (NO_PRED)
       {
         pred_alloc = newPrimaryCores;
         // newPrimaryCores = primary.maxCores;
-        if (LEARNING_MODE == 5 || LEARNING_MODE == 50)
+        if (LEARNING_MODE == 5 || LEARNING_MODE == 50 || LEARNING_MODE == 55)
         {
           if (newPrimaryCores != newPrimaryCoresPrev)
             HVMAgent_SpinUS(sleep_us);
