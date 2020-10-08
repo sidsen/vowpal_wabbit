@@ -76,6 +76,10 @@ const WCHAR ARG_CSV[] = L"--csv";
 const WCHAR ARG_DURATION[] = L"--duration_sec";
 const WCHAR ARG_BUFFER[] = L"--buffer";
 const WCHAR ARG_DELAY_MS[] = L"--delay_ms";
+const WCHAR ARG_GROW_DELAY_MS[] = L"--grow_delay_ms";
+const WCHAR ARG_SHRINK_DELAY_MS[] = L"--shrink_delay_ms";
+const WCHAR ARG_GROW_SLEEP_MS[] = L"--grow_sleep_ms";
+const WCHAR ARG_SHRINK_SLEEP_MS[] = L"--shrink_sleep_ms";
 const WCHAR ARG_REACTIVE_FIXED_BUFFER_MODE[] = L"--reactive_buffer_mode";
 const WCHAR ARG_LEARNING_MODE[] = L"--learning_mode";
 const WCHAR ARG_WINDOW[] = L"--window";
@@ -129,6 +133,10 @@ int bufferSize = -1;
 int FIXED_BUFFER_MODE = 0;
 int REACTIVE_FIXED_BUFFER_MODE = 0;
 float DELAY_MS = 0;
+float GROW_DELAY_MS = 0;
+float SHRINK_DELAY_MS = 0;
+float GROW_SLEEP_MS = 0;
+float SHRINK_SLEEP_MS = 0;
 int LEARNING = 0;
 int LEARNING_MODE = 0;
 int window = 3;
@@ -220,6 +228,22 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
     else if (0 == ::_wcsnicmp(argv[0], ARG_DELAY_MS, ARRAY_SIZE(ARG_DELAY_MS)))
     {
       DELAY_MS = _wtof(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_GROW_DELAY_MS, ARRAY_SIZE(ARG_GROW_DELAY_MS)))
+    {
+      GROW_DELAY_MS = _wtof(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_SHRINK_DELAY_MS, ARRAY_SIZE(ARG_SHRINK_DELAY_MS)))
+    {
+      SHRINK_DELAY_MS = _wtof(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_GROW_SLEEP_MS, ARRAY_SIZE(ARG_GROW_SLEEP_MS)))
+    {
+      GROW_SLEEP_MS = _wtof(argv[1]);
+    }
+    else if (0 == ::_wcsnicmp(argv[0], ARG_SHRINK_SLEEP_MS, ARRAY_SIZE(ARG_SHRINK_SLEEP_MS)))
+    {
+      SHRINK_SLEEP_MS = _wtof(argv[1]);
     }
     else if (0 == ::_wcsnicmp(argv[0], ARG_LEARNING_MODE, ARRAY_SIZE(ARG_LEARNING_MODE)))
     {
@@ -478,6 +502,10 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
   wcout << "USE_PREV_PEAK: " << USE_PREV_PEAK << std::endl;
   wcout << "USE_PREV_PEAK_MULTIPLE: " << USE_PREV_PEAK_MULTIPLE << std::endl;
   wcout << "DELAY_MS: " << DELAY_MS << std::endl;
+  wcout << "GROW_DELAY_MS: " << GROW_DELAY_MS << std::endl;
+  wcout << "SHRINK_DELAY_MS: " << SHRINK_DELAY_MS << std::endl;
+  wcout << "GROW_SLEEP_MS: " << GROW_SLEEP_MS << std::endl;
+  wcout << "SHRINK_SLEEP_MS: " << SHRINK_SLEEP_MS << std::endl;
   wcout << "LEARNING_MODE: " << LEARNING_MODE << std::endl;
   wcout << "WINDOW: " << window << std::endl;
   wcout << "SAFEGUARD_MODE: " << SAFEGUARD_MODE << std::endl;
@@ -688,6 +716,10 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   verbose = FALSE;
   process_args(argc, argv);
   int sleep_us = (int)SLEEP_MS * 1000;
+  int grow_sleep_us = (int)GROW_SLEEP_MS * 1000;
+  int shrink_sleep_us = (int)SHRINK_SLEEP_MS * 1000;
+  int grow_delay_us = (int)GROW_DELAY_MS * 1000;
+  int shrink_delay_us = (int)SHRINK_DELAY_MS * 1000;
 
   /************************/
   // initialize HVM agent
@@ -757,6 +789,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   {
     case CSOAA:
       vw = VW::initialize("--csoaa " + to_string(primary.maxCores) + " --power_t 0 -l " + to_string(LEARNING_RATE));
+      std::cout << "--csoaa " + to_string(primary.maxCores) + " --power_t 0 -l " + to_string(LEARNING_RATE) << endl;
       std::cout << "csoaa: vw initialized with " << primary.maxCores << " classes." << endl;
       break;
     case REG:
@@ -842,7 +875,7 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
   while (timer.ElapsedSeconds() < RUN_DURATION_SEC)
   {
     debug_count++;
-    if (DEBUG && debug_count > 6)
+    if (DEBUG && debug_count > DEBUG)
       break;
 
     // reenable harvesting (if it was disabled) every reenable_harvest_us
@@ -1186,6 +1219,12 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
             // buffer runs out (underprediction) --> trigger immediate safeguard
             overpredicted = 0;
             safeguard = 1;
+            records[numLogEntries++] = {0, timer.ElapsedUS() / 1000000.0, hvmBusyCores, hvmCores, primaryBusyCores,
+                primaryCores, bitset<64>(primary.masks[primaryCores]).to_string(),
+                bitset<64>(systemBusyMask).to_string(), min, max, max5, max50, avg, stddev, med, pred, newPrimaryCores,
+                cpu_max_observed, overpredicted, safeguard, feedback_max, updateModel, bucketId};
+            ASSERT(numLogEntries < MAX_RECORDS);
+
             if (LEARNING_MODE == 4)
               break;  // stop data collection immediately for mode 4
 
@@ -1726,10 +1765,20 @@ int __cdecl wmain(int argc, __in_ecount(argc) WCHAR* argv[])
           {
             if (DEBUG)
               std::cout << "<debug> newPrimaryCores = " << newPrimaryCores << endl;
+            //if (mode == IPI || mode == IPI_HOLES)
+
+            if (newPrimaryCores < primary.curCores)
+              HVMAgent_SpinUS(grow_delay_us); //growing HVM
+            else
+              HVMAgent_SpinUS(shrink_delay_us); //shrinking HVM
+
             updateCores(newPrimaryCores, systemBusyMask);
             // printf("called update: primary.curMask=0x%x\n", primary.curMask);
-
-            HVMAgent_SpinUS(sleep_us);
+            if (newPrimaryCores < primary.curCores)
+              HVMAgent_SpinUS(grow_sleep_us); //growing HVM
+            else
+              HVMAgent_SpinUS(shrink_sleep_us); //shrinking HVM
+            //HVMAgent_SpinUS(sleep_us);
             count++;
           }
           else
