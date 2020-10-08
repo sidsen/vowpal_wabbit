@@ -102,6 +102,7 @@ const WCHAR ARG_FEEDBACK_MS[] = L"--feedback_ms";
 const WCHAR ARG_SLEEP_MS[] = L"--sleep_ms";
 const WCHAR ARG_MODE[] = L"--mode";
 const WCHAR ARG_MODE_IPI[] = L"IPI";
+const WCHAR ARG_MODE_DISJOINT_IPI[] = L"DISJOINT_IPI";
 const WCHAR ARG_MODE_IPI_HOLES[] = L"IPI_HOLES";
 const WCHAR ARG_MODE_DISJOINT_IPI_HOLES[] = L"DISJOINT_IPI_HOLES";
 const WCHAR ARG_MODE_CPUGROUPS[] = L"CpuGroups";
@@ -340,6 +341,12 @@ void __cdecl process_args(int argc, __in_ecount(argc) WCHAR* argv[])
       {
         mode = IPI;
         wcout << "MODE: IPI" << std::endl;
+      }
+      else if (0 == ::_wcsnicmp(argv[1], ARG_MODE_DISJOINT_IPI, ARRAY_SIZE(ARG_MODE_DISJOINT_IPI)))
+      {
+        mode = IPI;
+        disjointCpuGroups = TRUE;
+        wcout << "MODE: DISJOINT_IPI" << std::endl;
       }
       else if (0 == ::_wcsnicmp(argv[1], ARG_MODE_IPI_HOLES, ARRAY_SIZE(ARG_MODE_IPI_HOLES)))
       {
